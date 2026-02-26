@@ -348,7 +348,37 @@ async function generateSubtitle(chatId, episodeId, lang = "English", sock) {
     return null;
   }
 }
-async function handleMessage(msg) {
+
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState("auth");
+  const { version } = await fetchLatestBaileysVersion();
+
+  const sock = makeWASocket({
+    version,
+    logger: P({ level: "silent" }),
+    auth: state,
+    browser: ["Kiroflix Bot", "Chrome", "1.0"]
+  });
+
+  sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
+  if (qr) {
+    // Convert QR to data URL for browser
+    qrCodeDataURL = await qrcode.toDataURL(qr);
+    console.log("📲 QR code updated. Scan from your browser!");
+  }
+
+  if (connection === "open") {
+    console.log("✅ WhatsApp connected");
+    qrCodeDataURL = null; // clear QR after login
+  }
+
+  if (connection === "close") {
+    const shouldReconnect =
+      lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+    if (shouldReconnect) startBot();
+  }
+});
+  async function handleMessage(msg) {
   const userId = msg.key.remoteJid;
 
   // Skip if this user is already processing
@@ -449,35 +479,6 @@ Here is the latest available episode 👇
     userLocks.delete(userId); // release lock
   }
 }
-async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState("auth");
-  const { version } = await fetchLatestBaileysVersion();
-
-  const sock = makeWASocket({
-    version,
-    logger: P({ level: "silent" }),
-    auth: state,
-    browser: ["Kiroflix Bot", "Chrome", "1.0"]
-  });
-
-  sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
-  if (qr) {
-    // Convert QR to data URL for browser
-    qrCodeDataURL = await qrcode.toDataURL(qr);
-    console.log("📲 QR code updated. Scan from your browser!");
-  }
-
-  if (connection === "open") {
-    console.log("✅ WhatsApp connected");
-    qrCodeDataURL = null; // clear QR after login
-  }
-
-  if (connection === "close") {
-    const shouldReconnect =
-      lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-    if (shouldReconnect) startBot();
-  }
-});
 
   sock.ev.on("creds.update", saveCreds);
 
@@ -500,6 +501,7 @@ async function startBot() {
 }
 
 startBot();
+
 
 
 
