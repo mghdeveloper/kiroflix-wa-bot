@@ -401,51 +401,45 @@ async function startBot() {
   async function handleMessage(msg) {
   const userId = msg.key.remoteJid;
 
-  // Skip if this user is already processing
   if (userLocks.get(userId)) {
-    console.log(`[LOCK] Skipping message from ${userId} (already processing)`);
+    console.log(`[LOCK] Skipping message from ${userId}`);
     return;
   }
 
-  userLocks.set(userId, true); // lock user
+  userLocks.set(userId, true);
 
   try {
     const from = userId;
     const text =
-  msg.message.conversation ||
-  msg.message.extendedTextMessage?.text ||
-  "";
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text ||
+      "";
 
-if (!text) return;
+    if (!text) return;
 
-// 🧠 FIRST → parse intent BEFORE sending any message
-const intent = await parseIntent(text);
-
-// ❌ If AI says not an anime request
-if (!intent || intent.notFound || !intent.episode) {
-  const reply = await generalReply(text);
-
-  await sock.sendMessage(from, { text: reply });
-
-  await logUserUsage({
-    userId: from,
-    username: from,
-    message: text,
-    reply
-  });
-
-  return;
-}
-
-// ✅ NOW we know it's a real episode request
-await sock.sendMessage(from, { text: "🍿 Finding your episode..." });
-
+    // 🧠 Parse intent FIRST
     const intent = await parseIntent(text);
-    if (!intent) {
-      await sock.sendMessage(from, { text: "❌ Could not understand request" });
+
+    // ❌ Not an anime request → general AI reply
+    if (!intent || intent.notFound || !intent.episode) {
+      const reply = await generalReply(text);
+
+      await sock.sendMessage(from, { text: reply });
+
+      await logUserUsage({
+        userId: from,
+        username: from,
+        message: text,
+        reply
+      });
+
       return;
     }
 
+    // ✅ Valid request → now show loading
+    await sock.sendMessage(from, { text: "🍿 Finding your episode..." });
+
+    // 🔎 Search anime
     const results = await searchAnime(intent.title);
     if (!results.length) {
       await sock.sendMessage(from, { text: "❌ Anime not found" });
@@ -459,18 +453,17 @@ await sock.sendMessage(from, { text: "🍿 Finding your episode..." });
       return;
     }
 
-    // 🎯 find requested episode
     let episode = episodes.find(e => Number(e.number) === Number(intent.episode));
     let notReleasedMessage = "";
 
-    if (!episode && intent.episode) {
+    if (!episode) {
       const latestEpisode = episodes.reduce((max, ep) =>
         Number(ep.number) > Number(max.number) ? ep : max
       );
       episode = latestEpisode;
       notReleasedMessage =
 `⚠️ Episode ${intent.episode} is not released yet.
-Here is the latest available episode 👇
+Here is the latest available 👇
 
 `;
     }
@@ -495,7 +488,6 @@ Here is the latest available episode 👇
       await sock.sendMessage(from, { text: caption });
     }
 
-    // log usage
     await logUserUsage({
       userId: from,
       username: from,
@@ -503,7 +495,7 @@ Here is the latest available episode 👇
       reply: caption
     });
 
-    // subtitles
+    // 🎯 Subtitles
     if (intent.subtitle) {
       const lang = intent.subtitleLang || "English";
       const subs = await fetchAvailableSubtitles(episode.id);
@@ -520,7 +512,7 @@ Here is the latest available episode 👇
     logError("MAIN HANDLER", err);
     await sock.sendMessage(msg.key.remoteJid, { text: "⚠️ Something went wrong" });
   } finally {
-    userLocks.delete(userId); // release lock
+    userLocks.delete(userId);
   }
 }
 
@@ -545,6 +537,7 @@ Here is the latest available episode 👇
 }
 
 startBot();
+
 
 
 
