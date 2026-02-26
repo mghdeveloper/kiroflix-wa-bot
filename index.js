@@ -417,14 +417,21 @@ async function startBot() {
 
     if (!text) return;
 
-    // 🧠 Parse intent FIRST
+    // 🧠 1️⃣ Send thinking message
+    const thinkingMsg = await sock.sendMessage(from, { text: "🤔 Thinking..." });
+    const thinkingKey = thinkingMsg.key;
+
+    // 🧠 2️⃣ Parse intent
     const intent = await parseIntent(text);
 
-    // ❌ Not an anime request → general AI reply
+    // ❌ Not an anime request → edit with AI reply
     if (!intent || intent.notFound || !intent.episode) {
       const reply = await generalReply(text);
 
-      await sock.sendMessage(from, { text: reply });
+      await sock.sendMessage(from, {
+        text: reply,
+        edit: thinkingKey
+      });
 
       await logUserUsage({
         userId: from,
@@ -436,8 +443,11 @@ async function startBot() {
       return;
     }
 
-    // ✅ Valid request → now show loading
-    await sock.sendMessage(from, { text: "🍿 Finding your episode..." });
+    // ✅ Valid request → edit message to loading
+    await sock.sendMessage(from, {
+      text: "🍿 Finding your episode...",
+      edit: thinkingKey
+    });
 
     // 🔎 Search anime
     const results = await searchAnime(intent.title);
@@ -453,6 +463,7 @@ async function startBot() {
       return;
     }
 
+    // 🎯 Find episode
     let episode = episodes.find(e => Number(e.number) === Number(intent.episode));
     let notReleasedMessage = "";
 
@@ -479,6 +490,7 @@ Here is the latest available 👇
 📺 Episode ${episode.number}: ${episode.title}
 ▶️ ${stream.player}`;
 
+    // 🎬 Send episode card
     if (anime.poster) {
       await sock.sendMessage(from, {
         image: { url: anime.poster },
@@ -488,6 +500,7 @@ Here is the latest available 👇
       await sock.sendMessage(from, { text: caption });
     }
 
+    // 🧾 Log usage
     await logUserUsage({
       userId: from,
       username: from,
@@ -495,14 +508,18 @@ Here is the latest available 👇
       reply: caption
     });
 
-    // 🎯 Subtitles
+    // 🎯 Subtitle logic
     if (intent.subtitle) {
       const lang = intent.subtitleLang || "English";
       const subs = await fetchAvailableSubtitles(episode.id);
-      const existing = subs.find(s => s.lang.toLowerCase() === lang.toLowerCase());
+      const existing = subs.find(
+        s => s.lang.toLowerCase() === lang.toLowerCase()
+      );
 
       if (existing) {
-        await sock.sendMessage(from, { text: `🎯 Subtitle already available: ${existing.lang}` });
+        await sock.sendMessage(from, {
+          text: `🎯 Subtitle already available: ${existing.lang}`
+        });
       } else {
         await generateSubtitle(from, episode.id, lang, sock);
       }
@@ -510,7 +527,9 @@ Here is the latest available 👇
 
   } catch (err) {
     logError("MAIN HANDLER", err);
-    await sock.sendMessage(msg.key.remoteJid, { text: "⚠️ Something went wrong" });
+    await sock.sendMessage(msg.key.remoteJid, {
+      text: "⚠️ Something went wrong"
+    });
   } finally {
     userLocks.delete(userId);
   }
@@ -537,6 +556,7 @@ Here is the latest available 👇
 }
 
 startBot();
+
 
 
 
