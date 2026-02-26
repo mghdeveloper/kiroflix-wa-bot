@@ -9,9 +9,8 @@ const {
 
 const axios = require("axios");
 const P = require("pino");
-const qrcode = require("qrcode-terminal");
 const express = require("express");
-
+const qrcode = require("qrcode"); // instead of qrcode-terminal
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -495,3 +494,4 @@ Here is the latest available episode 👇
 }
 
 startBot();
+
