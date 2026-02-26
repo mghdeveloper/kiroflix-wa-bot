@@ -482,7 +482,7 @@ Here is the latest available episode 👇
             text: `🎯 Subtitle already available: ${existing.lang}`
           });
         } else {
-          await generateSubtitle(from, episode.id, lang);
+          await generateSubtitle(from, episode.id, lang, sock);
         }
       }
 
@@ -494,4 +494,5 @@ Here is the latest available episode 👇
 }
 
 startBot();
+
 
