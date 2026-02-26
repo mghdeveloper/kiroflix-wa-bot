@@ -152,7 +152,27 @@ async function searchAnime(title) {
     return [];
   }
 }
+async function generalReply(userText) {
+  const prompt = `
+You are a friendly assistant for an anime episode bot.
 
+If the user is:
+- greeting
+- asking how the bot works
+- chatting outside anime requests
+
+Reply with ONE short friendly sentence inviting them to try:
+👉 send an anime name + episode number
+
+Examples tone:
+"Hi 👋 Just send an anime title and episode number to start watching 🍿"
+
+User message: ${userText}
+`;
+
+  const res = await askAI(prompt);
+  return res || "👋 Send an anime title and episode number to start watching 🍿";
+}
 // -------------------- AI MATCH --------------------
 async function chooseBestAnime(intent, results) {
   try {
@@ -391,10 +411,34 @@ async function startBot() {
 
   try {
     const from = userId;
-    const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-    if (!text) return;
+    const text =
+  msg.message.conversation ||
+  msg.message.extendedTextMessage?.text ||
+  "";
 
-    await sock.sendMessage(from, { text: "🍿 Finding your episode..." });
+if (!text) return;
+
+// 🧠 FIRST → parse intent BEFORE sending any message
+const intent = await parseIntent(text);
+
+// ❌ If AI says not an anime request
+if (!intent || intent.notFound || !intent.episode) {
+  const reply = await generalReply(text);
+
+  await sock.sendMessage(from, { text: reply });
+
+  await logUserUsage({
+    userId: from,
+    username: from,
+    message: text,
+    reply
+  });
+
+  return;
+}
+
+// ✅ NOW we know it's a real episode request
+await sock.sendMessage(from, { text: "🍿 Finding your episode..." });
 
     const intent = await parseIntent(text);
     if (!intent) {
@@ -501,6 +545,7 @@ Here is the latest available episode 👇
 }
 
 startBot();
+
 
 
 
