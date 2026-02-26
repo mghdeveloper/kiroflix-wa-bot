@@ -10,6 +10,14 @@ const {
 const axios = require("axios");
 const P = require("pino");
 const qrcode = require("qrcode-terminal");
+const express = require("express");
+
+// -------------------- SERVER --------------------
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (_, res) => res.send("Kiroflix bot alive 🌟"));
+app.listen(PORT, () => console.log("[SERVER] Running on", PORT));
 
 // -------------------- CONFIG --------------------
 const GEMINI_KEY = process.env.GEMINI_KEY;
@@ -465,5 +473,6 @@ Here is the latest available episode 👇
     }
   });
 }
+
 
 startBot();
