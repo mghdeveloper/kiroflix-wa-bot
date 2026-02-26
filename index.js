@@ -579,39 +579,30 @@ sock.ev.on("messages.upsert", async ({ messages }) => {
 
   if (!text) return;
 
+  text = text.trim();
+
+  // ✅ GROUP LOGIC
   if (isGroup) {
-    const contextInfo =
-      msg.message.extendedTextMessage?.contextInfo ||
-      msg.message.imageMessage?.contextInfo ||
-      msg.message.videoMessage?.contextInfo;
+    // Only respond to /stream commands in groups
+    if (!text.toLowerCase().startsWith("/stream")) return;
 
-    const mentions = contextInfo?.mentionedJid || [];
-
-    // ✅ Multi-device safe bot number
-    const botNumber = sock.user.id.split(":")[0]; 
-    const isMentioned = mentions.some(jid => jid.startsWith(botNumber));
-
-    // ✅ Check command
-    const hasCommand = COMMANDS.some(cmd =>
-      text.toLowerCase().includes(cmd.toLowerCase())
-    );
-
-    if (!isMentioned || !hasCommand) return;
-
-    // ✅ Remove mention from text
-    const mentionTag = `@${botNumber.split("@")[0]}`;
-    text = text.replace(new RegExp(mentionTag, "g"), "").trim();
+    // Remove "/stream" from text before sending to handler
+    text = text.replace(/^\/stream/i, "").trim();
   }
 
-  // 🚀 Run main handler
+  // ✅ PRIVATE CHAT
+  // In private, allow everything (no command needed)
+
   await handleMessage({
     ...msg,
+    key: { ...msg.key, remoteJid: from },
     message: { conversation: text }
   });
 });
 }
 
 startBot();
+
 
 
 
