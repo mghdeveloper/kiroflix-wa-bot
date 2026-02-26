@@ -12,13 +12,28 @@ const P = require("pino");
 const qrcode = require("qrcode-terminal");
 const express = require("express");
 
-// -------------------- SERVER --------------------
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.get("/", (_, res) => res.send("Kiroflix bot alive 🌟"));
-app.listen(PORT, () => console.log("[SERVER] Running on", PORT));
+let qrCodeDataURL = null; // store latest QR code
 
+app.get("/", async (_, res) => {
+  // If bot is logged in, just show a message
+  if (!qrCodeDataURL) {
+    res.send(`
+      <h2>Kiroflix WhatsApp Bot</h2>
+      <p>Bot is connected ✅</p>
+    `);
+  } else {
+    res.send(`
+      <h2>Kiroflix WhatsApp Bot</h2>
+      <p>Scan this QR code to login:</p>
+      <img src="${qrCodeDataURL}" alt="WhatsApp QR" />
+    `);
+  }
+});
+
+app.listen(PORT, () => console.log("[SERVER] Running on", PORT));
 // -------------------- CONFIG --------------------
 const GEMINI_KEY = process.env.GEMINI_KEY;
 const GEMINI_URL =
@@ -343,19 +358,24 @@ async function startBot() {
     browser: ["Kiroflix Bot", "Chrome", "1.0"]
   });
 
-  sock.ev.on("connection.update", ({ connection, qr, lastDisconnect }) => {
-    if (qr) qrcode.generate(qr, { small: true });
+  sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
+  if (qr) {
+    // Convert QR to data URL for browser
+    qrCodeDataURL = await qrcode.toDataURL(qr);
+    console.log("📲 QR code updated. Scan from your browser!");
+  }
 
-    if (connection === "open") console.log("✅ WhatsApp connected");
+  if (connection === "open") {
+    console.log("✅ WhatsApp connected");
+    qrCodeDataURL = null; // clear QR after login
+  }
 
-    if (connection === "close") {
-      const shouldReconnect =
-        lastDisconnect?.error?.output?.statusCode !==
-        DisconnectReason.loggedOut;
-
-      if (shouldReconnect) startBot();
-    }
-  });
+  if (connection === "close") {
+    const shouldReconnect =
+      lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+    if (shouldReconnect) startBot();
+  }
+});
 
   sock.ev.on("creds.update", saveCreds);
 
@@ -473,6 +493,5 @@ Here is the latest available episode 👇
     }
   });
 }
-
 
 startBot();
