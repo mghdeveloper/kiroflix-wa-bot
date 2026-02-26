@@ -559,19 +559,28 @@ Here is the latest available 👇
   sock.ev.on("creds.update", saveCreds);
 
   // 📩 MAIN MESSAGE HANDLER
-  // 📩 MAIN MESSAGE HANDLER
-const COMMANDS = ["/stream"]; // Add other commands here if needed
+const COMMANDS = ["/stream"]; // commands you want to detect
 
 sock.ev.on("messages.upsert", ({ messages }) => {
   const msg = messages[0];
   if (!msg.message) return;
-  if (msg.key.fromMe) return; // ignore own messages
+  if (msg.key.fromMe) return; // ignore bot's own messages
 
   const isGroup = msg.key.remoteJid.endsWith("@g.us");
-  let text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+
+  // 📝 Extract the text correctly
+  let text =
+    msg.message.conversation ||
+    msg.message.extendedTextMessage?.text ||
+    msg.message.imageMessage?.caption ||
+    msg.message.videoMessage?.caption ||
+    "";
+
+  if (!text) return;
 
   if (isGroup) {
-    const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+    const contextInfo = msg.message.extendedTextMessage?.contextInfo;
+    const mentions = contextInfo?.mentionedJid || [];
     const botJid = sock.user.id;
 
     // Only process if bot is mentioned AND a command is present
@@ -579,11 +588,15 @@ sock.ev.on("messages.upsert", ({ messages }) => {
     if (!mentions.includes(botJid) || !hasCommand) return;
 
     // Remove bot mention from text
-    const mentionRegex = new RegExp(`@${botJid.split("@")[0]}`, "g");
-    text = text.replace(mentionRegex, "").trim();
+    mentions.forEach(jid => {
+      if (jid === botJid) {
+        const mentionRegex = new RegExp(`@${botJid.split("@")[0]}`, "g");
+        text = text.replace(mentionRegex, "").trim();
+      }
+    });
   }
 
-  // Run handler
+  // Run the handler
   (async () => {
     await handleMessage({ ...msg, message: { ...msg.message, conversation: text } });
   })();
@@ -591,6 +604,7 @@ sock.ev.on("messages.upsert", ({ messages }) => {
 }
 
 startBot();
+
 
 
 
