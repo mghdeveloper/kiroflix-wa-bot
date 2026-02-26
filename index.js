@@ -561,14 +561,15 @@ Here is the latest available 👇
   // 📩 MAIN MESSAGE HANDLER
 const COMMANDS = ["/stream"]; // commands you want to detect
 
-sock.ev.on("messages.upsert", ({ messages }) => {
+sock.ev.on("messages.upsert", async ({ messages }) => {
   const msg = messages[0];
   if (!msg.message) return;
-  if (msg.key.fromMe) return; // ignore bot's own messages
+  if (msg.key.fromMe) return;
 
-  const isGroup = msg.key.remoteJid.endsWith("@g.us");
+  const from = msg.key.remoteJid;
+  const isGroup = from.endsWith("@g.us");
 
-  // 📝 Extract the text correctly
+  // 📝 Extract text safely
   let text =
     msg.message.conversation ||
     msg.message.extendedTextMessage?.text ||
@@ -579,31 +580,39 @@ sock.ev.on("messages.upsert", ({ messages }) => {
   if (!text) return;
 
   if (isGroup) {
-    const contextInfo = msg.message.extendedTextMessage?.contextInfo;
+    const contextInfo =
+      msg.message.extendedTextMessage?.contextInfo ||
+      msg.message.imageMessage?.contextInfo ||
+      msg.message.videoMessage?.contextInfo;
+
     const mentions = contextInfo?.mentionedJid || [];
-    const botJid = sock.user.id;
 
-    // Only process if bot is mentioned AND a command is present
-    const hasCommand = COMMANDS.some(cmd => text.toLowerCase().includes(cmd));
-    if (!mentions.includes(botJid) || !hasCommand) return;
+    // ✅ Multi-device safe bot number
+    const botNumber = sock.user.id.split(":")[0]; 
+    const isMentioned = mentions.some(jid => jid.startsWith(botNumber));
 
-    // Remove bot mention from text
-    mentions.forEach(jid => {
-      if (jid === botJid) {
-        const mentionRegex = new RegExp(`@${botJid.split("@")[0]}`, "g");
-        text = text.replace(mentionRegex, "").trim();
-      }
-    });
+    // ✅ Check command
+    const hasCommand = COMMANDS.some(cmd =>
+      text.toLowerCase().includes(cmd.toLowerCase())
+    );
+
+    if (!isMentioned || !hasCommand) return;
+
+    // ✅ Remove mention from text
+    const mentionTag = `@${botNumber.split("@")[0]}`;
+    text = text.replace(new RegExp(mentionTag, "g"), "").trim();
   }
 
-  // Run the handler
-  (async () => {
-    await handleMessage({ ...msg, message: { ...msg.message, conversation: text } });
-  })();
+  // 🚀 Run main handler
+  await handleMessage({
+    ...msg,
+    message: { conversation: text }
+  });
 });
 }
 
 startBot();
+
 
 
 
