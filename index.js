@@ -559,24 +559,39 @@ Here is the latest available 👇
   sock.ev.on("creds.update", saveCreds);
 
   // 📩 MAIN MESSAGE HANDLER
-  sock.ev.on("messages.upsert", ({ messages }) => {
+  // 📩 MAIN MESSAGE HANDLER
+const COMMANDS = ["/stream"]; // Add other commands here if needed
+
+sock.ev.on("messages.upsert", ({ messages }) => {
   const msg = messages[0];
   if (!msg.message) return;
+  if (msg.key.fromMe) return; // ignore own messages
 
-  // ✅ Ignore bot's own messages
-  if (msg.key.fromMe) return;
+  const isGroup = msg.key.remoteJid.endsWith("@g.us");
+  let text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
-  // ❌ Ignore groups
-  if (msg.key.remoteJid.endsWith("@g.us")) return;
+  if (isGroup) {
+    const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+    const botJid = sock.user.id;
 
-  // Run handler async without blocking other messages
+    // Only process if bot is mentioned AND a command is present
+    const hasCommand = COMMANDS.some(cmd => text.toLowerCase().includes(cmd));
+    if (!mentions.includes(botJid) || !hasCommand) return;
+
+    // Remove bot mention from text
+    const mentionRegex = new RegExp(`@${botJid.split("@")[0]}`, "g");
+    text = text.replace(mentionRegex, "").trim();
+  }
+
+  // Run handler
   (async () => {
-    await handleMessage(msg);
+    await handleMessage({ ...msg, message: { ...msg.message, conversation: text } });
   })();
 });
 }
 
 startBot();
+
 
 
 
