@@ -75,20 +75,24 @@ You are an anime title parser.
 
 GOAL:
 1️⃣ Detect the anime title from ANY language (Arabic, French, Japanese romaji, etc.)
-2️⃣ Convert it to the MOST COMMON OFFICIAL TITLE in English.
-   - If the anime is primarily known by a Japanese title (e.g., "Jigokuraku"), use that.
+2️⃣ Convert it to the MOST COMMON OFFICIAL TITLE in English or Romaji.
 3️⃣ Extract season/part (if any)
 4️⃣ Extract episode number
-5️⃣ Detect if subtitle is requested + language (English,Frensh...)
 
-IMPORTANT RULES:
+IMPORTANT BEHAVIOR:
+✅ If the user ONLY sends an anime title with NO episode number:
+→ set episode = 1
+
+✅ If the title is a MOVIE anime:
+→ set episode = 1
+
 - If you are NOT sure what anime it is → return {"notFound": true}
 - NEVER guess.
 - Return ONLY JSON.
 
 FORMAT:
 {
-  "title":"official anime title in English or Romaji",
+  "title":"official anime title",
   "season":null,
   "episode":number,
   "subtitle":false,
@@ -98,7 +102,6 @@ FORMAT:
 
 User: ${text}
 `;
-
     let res = await askAI(prompt);
     res = res.replace(/```json|```/gi, "").trim();
     const json = res.match(/\{[\s\S]*\}/)?.[0];
@@ -602,6 +605,7 @@ sock.ev.on("messages.upsert", async ({ messages }) => {
 }
 
 startBot();
+
 
 
 
