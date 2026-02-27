@@ -231,27 +231,49 @@ async function getEpisodes(id) {
 
 // -------------------- STREAM GENERATOR --------------------
 async function generateStream(episodeId) {
-  try {
-    const { data } = await axios.get(
-      "https://kiroflix.cu.ma/generate/generate_episode.php",
-      {
-        params: { episode_id: episodeId },
-        timeout: 40000 // 40 seconds
+  const maxRetries = 3;
+  const delay = (ms) => new Promise(res => setTimeout(res, ms));
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`🎬 Generating stream (Attempt ${attempt}/${maxRetries})`);
+
+      const { data } = await axios.get(
+        "https://kiroflix.cu.ma/generate/generate_episode.php",
+        {
+          params: { episode_id: episodeId },
+          timeout: 40000
+        }
+      );
+
+      if (data?.success) {
+        console.log("✅ Stream generated successfully");
+
+        return {
+          player: `https://kiroflix.cu.ma/generate/player/?episode_id=${episodeId}`,
+          master: data.master,
+          subtitle: data.subtitle
+        };
       }
-    );
 
-    if (!data?.success) return null;
+      console.log("⚠️ API responded but not successful");
 
-    return {
-      player: `https://kiroflix.cu.ma/generate/player/?episode_id=${episodeId}`,
-      master: data.master,
-      subtitle: data.subtitle
-    };
+    } catch (err) {
+      console.error(
+        `❌ Attempt ${attempt} failed:`,
+        err.response?.status || err.message
+      );
+    }
 
-  } catch (err) {
-    console.error("❌ Stream generation error:", err.message);
-    return null;
+    // Wait before retry (except last attempt)
+    if (attempt < maxRetries) {
+      console.log("⏳ Retrying in 2 seconds...");
+      await delay(2000);
+    }
   }
+
+  console.error("🚨 All stream generation attempts failed");
+  return null;
 }
 async function fetchAvailableSubtitles(episodeId) {
   try {
@@ -607,3 +629,4 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
