@@ -143,7 +143,7 @@ async function searchAnime(title) {
     logStep("SEARCH TITLE", title);
 
     const { data } = await axios.get(
-      "https://creators.kiroflix.site/backend/anime_search.php",
+      "https://kiroflix.site/backend/anime_search.php",
       { params: { q: title } }
     );
 
@@ -216,7 +216,7 @@ async function getEpisodes(id) {
     logStep("FETCH EPISODES FOR", id);
 
     const { data } = await axios.get(
-      "https://creators.kiroflix.site/backend/episodes_proxy.php",
+      "https://kiroflix.site/backend/episodes_proxy.php",
       { params: { id } }
     );
 
@@ -273,7 +273,7 @@ async function logUserUsage({
 }) {
   try {
     await axios.post(
-      "https://creators.kiroflix.site/backend/log_usage.php",
+      "https://kiroflix.site/backend/log_usage.php",
       {
         user_id: userId,
         username,
@@ -298,7 +298,7 @@ async function generateSubtitle(chatId, episodeId, lang = "English", sock) {
   try {
     // 2️⃣ Fetch base VTT (same endpoint)
     const { data: vttText } = await axios.get(
-      `https://creators.kiroflix.site/backend/vttreader.php`,
+      `https://kiroflix.site/backend/vttreader.php`,
       { params: { episode_id: episodeId } }
     );
 
@@ -368,7 +368,7 @@ async function generateSubtitle(chatId, episodeId, lang = "English", sock) {
     const subtitleURL =
       `https://kiroflix.cu.ma/generate/episodes/${episodeId}/${filename}`;
 
-    await axios.post(`https://creators.kiroflix.site/backend/store_subtitle.php`, {
+    await axios.post(`https://kiroflix.site/backend/store_subtitle.php`, {
       episode_id: episodeId,
       language: lang,
       subtitle_url: subtitleURL
@@ -607,17 +607,3 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
