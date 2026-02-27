@@ -564,7 +564,9 @@ Here is the latest available 👇
   // 📩 MAIN MESSAGE HANDLER
 const COMMANDS = ["/stream"]; // commands you want to detect
 
-sock.ev.on("messages.upsert", async ({ messages }) => {
+sock.ev.on("messages.upsert", async ({ messages, type }) => {
+  if (type !== "notify") return; // ✅ ignore duplicates
+
   const msg = messages[0];
   if (!msg.message) return;
   if (msg.key.fromMe) return;
@@ -605,6 +607,7 @@ sock.ev.on("messages.upsert", async ({ messages }) => {
 }
 
 startBot();
+
 
 
 
