@@ -517,16 +517,28 @@ async function handleManhwaRequest(text, from, sock) {
   // 📄 SEND CHAPTER PAGES
   // ===============================
   for (let i = 0; i < images.length; i++) {
+  try {
+    const response = await axios.get(images[i], {
+      responseType: "arraybuffer",
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://manhwazone.to/"
+      }
+    });
+
+    const buffer = Buffer.from(response.data);
 
     await sock.sendMessage(from, {
-      image: { url: images[i] },
+      image: buffer,
       caption: `📄 Page ${i + 1}/${images.length}`
     });
 
-    // anti-flood delay
     await new Promise(res => setTimeout(res, 250));
-  }
 
+  } catch (err) {
+    logError("IMAGE STREAM FAIL", images[i]);
+  }
+}
   await sock.sendMessage(from, { text: "✅ End of chapter." });
 }
 async function detectMessageType(text) {
@@ -961,6 +973,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
