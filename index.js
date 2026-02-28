@@ -286,27 +286,27 @@ async function fetchAvailableSubtitles(episodeId) {
     return [];
   }
 }
-async function logUserUsage({
-  userId,
+async function logWAUsage({
+  userJid,
   username,
-  message,
-  reply,
+  userMessage,
+  aiReply,
   country = "Unknown"
 }) {
   try {
     await axios.post(
-      "https://kiroflix.site/backend/log_usage.php",
+      "https://kiroflix.site/backend/log_wa_usage.php",
       {
-        user_id: userId,
+        user_jid: userJid,
         username,
-        message,
-        reply,
+        user_message: userMessage,
+        ai_reply: aiReply,
         country,
         date: new Date().toISOString()
       }
     );
   } catch (err) {
-    console.error("❌ Failed to log usage:", err.message);
+    console.error("❌ Failed to log WA usage:", err.message);
   }
 }
 async function generateSubtitle(chatId, episodeId, lang = "English", sock) {
@@ -547,12 +547,12 @@ Here is the latest available 👇
     }
 
     // 🧾 Log usage
-    await logUserUsage({
-      userId: from,
-      username: from,
-      message: text,
-      reply: caption
-    });
+    await logWAUsage({
+  userJid: from,
+  username: from,
+  userMessage: text,
+  aiReply: caption
+});
 
     // 🎯 Subtitle logic
     if (intent.subtitle) {
@@ -629,4 +629,5 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
