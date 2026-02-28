@@ -765,6 +765,75 @@ async function startBot() {
     });
   }
 }
+  async function handleMessage(msg) {
+  const userId = msg.key.remoteJid;
+
+  if (userLocks.get(userId)) {
+    console.log(`[LOCK] Skipping message from ${userId}`);
+    return;
+  }
+
+  userLocks.set(userId, true);
+
+  try {
+    const from = userId;
+
+    const text =
+      msg.message?.conversation ||
+      msg.message?.extendedTextMessage?.text ||
+      "";
+
+    if (!text) return;
+
+    // 🧠 Send thinking message
+    const thinkingMsg = await sock.sendMessage(from, {
+      text: "🤔 Thinking..."
+    });
+
+    const thinkingKey = thinkingMsg.key;
+
+    // 🧠 Detect message type
+    const type = await detectMessageType(text);
+
+    // 🎬 ANIME
+    if (type.type === "anime") {
+      const intent = await parseIntent(text);
+
+      if (!intent || intent.notFound) {
+        await sock.sendMessage(from, {
+          text: "❌ Could not detect anime",
+          edit: thinkingKey
+        });
+        return;
+      }
+
+      await handleAnimeRequest(intent, text, from, thinkingKey);
+      return;
+    }
+
+    // 📚 MANHWA
+    if (type.type === "manhwa") {
+      await sock.sendMessage(from, {
+        text: "📚 Loading manhwa...",
+        edit: thinkingKey
+      });
+
+      await handleManhwaRequest(text, from, sock);
+      return;
+    }
+
+    // 💬 CASUAL / UNKNOWN
+    await handleGeneralRequest(text, from, thinkingKey);
+
+  } catch (err) {
+    logError("MAIN HANDLER", err);
+    await sock.sendMessage(msg.key.remoteJid, {
+      text: "⚠️ Something went wrong"
+    });
+  } finally {
+    userLocks.delete(userId);
+  }
+}
   sock.ev.on("creds.update", saveCreds);
 
   // 📩 MAIN MESSAGE HANDLER
