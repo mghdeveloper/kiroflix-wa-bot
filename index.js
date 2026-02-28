@@ -329,29 +329,51 @@ User: ${text}
     return null;
   }
 }
+// ===============================
+// 🔎 SEARCH MANHWA (V1)
+// ===============================
 async function searchManhwa(title) {
   try {
     const { data } = await axios.get(
-      "https://kiroflix.site/backend/manga_search.php",
+      "https://kiroflix.site/backend/manga_search-v1.php",
       { params: { q: title } }
     );
 
+    if (!data?.success) return [];
     return data.results || [];
+
   } catch (err) {
-    logError("MANHWA SEARCH", err);
+    logError("MANHWA SEARCH V1", err);
     return [];
   }
 }
+
+
+// ===============================
+// 🤖 AI BEST MATCH SELECTOR
+// ===============================
 async function chooseBestManhwa(intent, results) {
   try {
     const minimal = results.map(r => ({
       id: r.id,
-      title: r.url
+      title: r.title,
+      alt: r.alt_name,
+      score: r.score,
+      popularity: r.popularity
     }));
 
     const prompt = `
 User searching: "${intent.title}"
-Return ONLY the id of best match:
+
+Select the BEST match.
+Prioritize:
+- Exact title match
+- Alt name match
+- Highest score
+- Highest popularity
+
+Return ONLY the id.
+
 ${JSON.stringify(minimal)}
 `;
 
@@ -359,99 +381,153 @@ ${JSON.stringify(minimal)}
     const id = res.match(/[a-z0-9\-]+/)?.[0];
 
     return results.find(r => r.id === id) || results[0];
+
   } catch (err) {
     return results[0];
   }
 }
+
+
+// ===============================
+// 📖 GET DETAILS (V1)
+// ===============================
 async function getManhwaDetails(id) {
   try {
     const { data } = await axios.get(
-      "https://kiroflix.site/backend/manga-details.php",
+      "https://kiroflix.site/backend/manga-details_v1.php",
       { params: { id } }
     );
 
+    if (!data?.success) return null;
     return data.data;
+
   } catch (err) {
-    logError("MANHWA DETAILS", err);
+    logError("MANHWA DETAILS V1", err);
     return null;
   }
 }
-async function getChapterImages(chapterPath) {
+
+
+// ===============================
+// 🖼 FETCH CHAPTER IMAGES (V1)
+// ===============================
+async function getChapterImages(chapterUrl) {
   try {
     const { data } = await axios.get(
-      "https://kiroflix.site/backend/fetch_chapter.php",
-      { params: { chapter: chapterPath } }
+      "https://kiroflix.site/backend/chapter_images_v1.php",
+      { params: { url: chapterUrl } }
     );
 
-    return data.images || [];
+    if (!data?.success) return [];
+    return data.pages || [];
+
   } catch (err) {
-    logError("FETCH CHAPTER IMAGES", err);
+    logError("FETCH CHAPTER IMAGES V1", err);
     return [];
   }
 }
+
+
+// ===============================
+// 🚀 MAIN HANDLER
+// ===============================
 async function handleManhwaRequest(text, from, sock) {
+
   const intent = await parseManhwaIntent(text);
+
   if (!intent || intent.notFound) {
-    await sock.sendMessage(from, { text: "❌ Could not detect manhwa title" });
+    await sock.sendMessage(from, { text: "❌ Could not detect manhwa title." });
     return;
   }
 
   await sock.sendMessage(from, { text: "📚 Searching manhwa..." });
 
   const results = await searchManhwa(intent.title);
+
   if (!results.length) {
-    await sock.sendMessage(from, { text: "❌ Manhwa not found" });
+    await sock.sendMessage(from, { text: "❌ Manhwa not found." });
     return;
   }
 
   const manhwa = await chooseBestManhwa(intent, results);
   const details = await getManhwaDetails(manhwa.id);
+
   if (!details) {
-    await sock.sendMessage(from, { text: "❌ Failed to load details" });
+    await sock.sendMessage(from, { text: "❌ Failed to load details." });
     return;
   }
 
-  let chapter = details.chapters.find(c =>
-    c.title.toLowerCase().includes(`chapter ${intent.chapter}`)
-  );
-  if (!chapter) chapter = details.chapters[0];
+  // ===============================
+  // 📚 Chapter Selection (NEW LOGIC)
+  // ===============================
+  let chapter;
 
-  const chapterPath = chapter.url.split("asuracomic.net/")[1];
-  const images = await getChapterImages(chapterPath);
+  if (intent.chapter) {
+    chapter = details.chapters.find(
+      c => Number(c.chapter_no) === Number(intent.chapter)
+    );
+  }
+
+  // fallback to latest (already sorted newest first)
+  if (!chapter) {
+    chapter = details.chapters[0];
+  }
+
+  if (!chapter) {
+    await sock.sendMessage(from, { text: "❌ No chapters available." });
+    return;
+  }
+
+  await sock.sendMessage(from, { text: `📖 Loading ${chapter.name}...` });
+
+  // ===============================
+  // 🖼 FETCH IMAGES USING FULL URL
+  // ===============================
+  const images = await getChapterImages(chapter.url);
+
   if (!images.length) {
-    await sock.sendMessage(from, { text: "❌ Chapter images unavailable" });
+    await sock.sendMessage(from, { text: "❌ Chapter images unavailable." });
     return;
   }
 
-  // Info card
+  // ===============================
+  // 📌 INFO CARD
+  // ===============================
   const caption = `
 📖 *${details.title}*
-⭐ Rating: ${details.rating}
-📌 Status: ${details.status}
-📚 Chapter: ${chapter.title}
-🖊 Author: ${details.author}
+⭐ Score: ${details.score || "N/A"}
+📌 Status: ${details.status || "Unknown"}
+📚 Chapter: ${chapter.name}
+🖊 Author: ${details.author || "Unknown"}
+🏷 Genres: ${details.genres?.join(", ") || "N/A"}
 
-🔥 ${details.synopsis.substring(0, 200)}...
+🔥 ${details.synopsis?.substring(0, 250) || "No synopsis available."}...
 `;
 
   if (details.poster) {
-    await sock.sendMessage(from, { image: { url: details.poster }, caption });
+    await sock.sendMessage(from, {
+      image: { url: details.poster },
+      caption
+    });
   } else {
     await sock.sendMessage(from, { text: caption });
   }
 
-  // Send images **one by one with a small delay**
+  // ===============================
+  // 📄 SEND CHAPTER PAGES
+  // ===============================
   for (let i = 0; i < images.length; i++) {
+
     await sock.sendMessage(from, {
       image: { url: images[i] },
-      caption: `Page ${i + 1}/${images.length}`
+      caption: `📄 Page ${i + 1}/${images.length}`
     });
 
-    // Small delay to avoid flooding
-    await new Promise(res => setTimeout(res, 300));
+    // anti-flood delay
+    await new Promise(res => setTimeout(res, 250));
   }
 
-  await sock.sendMessage(from, { text: "✅ End of chapter" });
+  await sock.sendMessage(from, { text: "✅ End of chapter." });
 }
 async function detectMessageType(text) {
   try {
