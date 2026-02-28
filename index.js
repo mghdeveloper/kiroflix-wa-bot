@@ -286,6 +286,203 @@ async function fetchAvailableSubtitles(episodeId) {
     return [];
   }
 }
+async function parseManhwaIntent(text) {
+  try {
+    const prompt = `
+You are a manhwa title parser.
+
+GOAL:
+1️⃣ Detect the manhwa title (any language)
+2️⃣ Convert to official common English title
+3️⃣ Extract chapter number
+
+RULES:
+- If chapter not provided → set chapter = 1
+- If not sure → return {"notFound": true}
+- Return ONLY JSON
+
+FORMAT:
+{
+  "title": "official manhwa title",
+  "chapter": number,
+  "notFound": false
+}
+
+User: ${text}
+`;
+
+    let res = await askAI(prompt);
+    res = res.replace(/```json|```/gi, "").trim();
+    const json = res.match(/\{[\s\S]*\}/)?.[0];
+    if (!json) throw new Error("No JSON");
+
+    return JSON.parse(json);
+  } catch (err) {
+    logError("MANHWA INTENT", err);
+    return null;
+  }
+}
+async function searchManhwa(title) {
+  try {
+    const { data } = await axios.get(
+      "https://kiroflix.site/backend/manga_search.php",
+      { params: { q: title } }
+    );
+
+    return data.results || [];
+  } catch (err) {
+    logError("MANHWA SEARCH", err);
+    return [];
+  }
+}
+async function chooseBestManhwa(intent, results) {
+  try {
+    const minimal = results.map(r => ({
+      id: r.id,
+      title: r.url
+    }));
+
+    const prompt = `
+User searching: "${intent.title}"
+Return ONLY the id of best match:
+${JSON.stringify(minimal)}
+`;
+
+    const res = await askAI(prompt);
+    const id = res.match(/[a-z0-9\-]+/)?.[0];
+
+    return results.find(r => r.id === id) || results[0];
+  } catch (err) {
+    return results[0];
+  }
+}
+async function getManhwaDetails(id) {
+  try {
+    const { data } = await axios.get(
+      "https://kiroflix.site/backend/manga-details.php",
+      { params: { id } }
+    );
+
+    return data.data;
+  } catch (err) {
+    logError("MANHWA DETAILS", err);
+    return null;
+  }
+}
+async function getChapterImages(chapterPath) {
+  try {
+    const { data } = await axios.get(
+      "https://kiroflix.site/backend/fetch_chapter.php",
+      { params: { chapter: chapterPath } }
+    );
+
+    return data.images || [];
+  } catch (err) {
+    logError("FETCH CHAPTER IMAGES", err);
+    return [];
+  }
+}
+async function handleManhwaRequest(text, from, sock) {
+  const intent = await parseManhwaIntent(text);
+  if (!intent || intent.notFound) {
+    await sock.sendMessage(from, {
+      text: "❌ Could not detect manhwa title"
+    });
+    return;
+  }
+
+  await sock.sendMessage(from, { text: "📚 Searching manhwa..." });
+
+  const results = await searchManhwa(intent.title);
+  if (!results.length) {
+    await sock.sendMessage(from, { text: "❌ Manhwa not found" });
+    return;
+  }
+
+  const manhwa = await chooseBestManhwa(intent, results);
+  const details = await getManhwaDetails(manhwa.id);
+  if (!details) {
+    await sock.sendMessage(from, { text: "❌ Failed to load details" });
+    return;
+  }
+
+  // 🎯 Find Chapter
+  let chapter = details.chapters.find(c =>
+    c.title.toLowerCase().includes(`chapter ${intent.chapter}`)
+  );
+
+  if (!chapter) {
+    chapter = details.chapters[0];
+  }
+
+  const chapterPath = chapter.url.split("asuracomic.net/")[1];
+  const images = await getChapterImages(chapterPath);
+
+  if (!images.length) {
+    await sock.sendMessage(from, { text: "❌ Chapter images unavailable" });
+    return;
+  }
+
+  // 🎨 Stylish Info Card
+  const caption = `
+📖 *${details.title}*
+⭐ Rating: ${details.rating}
+📌 Status: ${details.status}
+📚 Chapter: ${chapter.title}
+🖊 Author: ${details.author}
+
+🔥 ${details.synopsis.substring(0, 200)}...
+`;
+
+  await sock.sendMessage(from, {
+    image: { url: details.poster },
+    caption
+  });
+
+  // 📸 Send Chapter Pages
+  for (let i = 0; i < images.length; i++) {
+    await sock.sendMessage(from, {
+      image: { url: images[i] },
+      caption: `Page ${i + 1}/${images.length}`
+    });
+  }
+
+  await sock.sendMessage(from, {
+    text: "✅ End of chapter"
+  });
+}
+async function detectMessageType(text) {
+  try {
+    const prompt = `
+You are a message classifier for an anime & manhwa bot.
+
+Classify the user message into ONE of these types:
+
+1️⃣ "casual" → greeting, small talk, asking how bot works
+2️⃣ "anime" → requesting anime episode/movie
+3️⃣ "manhwa" → requesting manhwa/manga chapter
+4️⃣ "unknown"
+
+Return ONLY JSON:
+
+{
+  "type": "casual" | "anime" | "manhwa" | "unknown"
+}
+
+User: ${text}
+`;
+
+    let res = await askAI(prompt);
+    res = res.replace(/```json|```/gi, "").trim();
+    const json = res.match(/\{[\s\S]*\}/)?.[0];
+    if (!json) throw new Error("No JSON");
+
+    return JSON.parse(json);
+  } catch (err) {
+    logError("MESSAGE TYPE", err);
+    return { type: "unknown" };
+  }
+}
 async function logWAUsage({
   userJid,
   username,
@@ -415,6 +612,107 @@ async function generateSubtitle(chatId, episodeId, lang = "English", sock) {
     return null;
   }
 }
+async function handleAnimeRequest(intent, originalText, from, thinkingKey) {
+  try {
+    // 🔄 Update thinking message
+    await sock.sendMessage(from, {
+      text: "🍿 Finding your episode...",
+      edit: thinkingKey
+    });
+
+    // 🔎 Search anime
+    const results = await searchAnime(intent.title);
+    if (!results.length) {
+      await sock.sendMessage(from, { text: "❌ Anime not found" });
+      return;
+    }
+
+    const anime = await chooseBestAnime(intent, results);
+    const episodes = await getEpisodes(anime.id);
+
+    if (!episodes.length) {
+      await sock.sendMessage(from, { text: "❌ Episodes unavailable" });
+      return;
+    }
+
+    // 🎯 Find requested episode
+    let episode = episodes.find(
+      e => Number(e.number) === Number(intent.episode)
+    );
+
+    let notReleasedMessage = "";
+
+    if (!episode) {
+      const latestEpisode = episodes.reduce((max, ep) =>
+        Number(ep.number) > Number(max.number) ? ep : max
+      );
+
+      episode = latestEpisode;
+
+      notReleasedMessage =
+`⚠️ Episode ${intent.episode} is not released yet.
+Here is the latest available 👇
+
+`;
+    }
+
+    // 🎬 Generate stream
+    const stream = await generateStream(episode.id);
+    if (!stream) {
+      await sock.sendMessage(from, {
+        text: "❌ Could not generate stream"
+      });
+      return;
+    }
+
+    const caption =
+`${notReleasedMessage}🎬 ${anime.title}
+📺 Episode ${episode.number}: ${episode.title}
+▶️ ${stream.player}`;
+
+    // 🖼 Send poster + caption
+    if (anime.poster) {
+      await sock.sendMessage(from, {
+        image: { url: anime.poster },
+        caption
+      });
+    } else {
+      await sock.sendMessage(from, { text: caption });
+    }
+
+    // 🧾 Log usage
+    await logWAUsage({
+      userJid: from,
+      username: from,
+      userMessage: originalText,
+      aiReply: caption
+    });
+
+    // 🎯 Subtitle logic
+    if (intent.subtitle) {
+      const lang = intent.subtitleLang || "English";
+
+      const subs = await fetchAvailableSubtitles(episode.id);
+      const existing = subs.find(
+        s => s.lang.toLowerCase() === lang.toLowerCase()
+      );
+
+      if (existing) {
+        await sock.sendMessage(from, {
+          text: `🎯 Subtitle already available: ${existing.lang}`
+        });
+      } else {
+        await generateSubtitle(from, episode.id, lang, sock);
+      }
+    }
+
+  } catch (err) {
+    logError("ANIME HANDLER", err);
+    await sock.sendMessage(from, {
+      text: "⚠️ Failed to load episode"
+    });
+  }
+}
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
@@ -444,143 +742,29 @@ async function startBot() {
     if (shouldReconnect) startBot();
   }
 });
-  async function handleMessage(msg) {
-  const userId = msg.key.remoteJid;
-
-  if (userLocks.get(userId)) {
-    console.log(`[LOCK] Skipping message from ${userId}`);
-    return;
-  }
-
-  userLocks.set(userId, true);
-
+  async function handleGeneralRequest(text, from, thinkingKey) {
   try {
-    const from = userId;
-    const text =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      "";
+    const reply = await generalReply(text);
 
-    if (!text) return;
-
-    // 🧠 1️⃣ Send thinking message
-    const thinkingMsg = await sock.sendMessage(from, { text: "🤔 Thinking..." });
-    const thinkingKey = thinkingMsg.key;
-
-    // 🧠 2️⃣ Parse intent
-    const intent = await parseIntent(text);
-
-    // ❌ Not an anime request → edit with AI reply
-    if (!intent || intent.notFound || !intent.episode) {
-      const reply = await generalReply(text);
-
-      await sock.sendMessage(from, {
-        text: reply,
-        edit: thinkingKey
-      });
-
-      await logUserUsage({
-        userId: from,
-        username: from,
-        message: text,
-        reply
-      });
-
-      return;
-    }
-
-    // ✅ Valid request → edit message to loading
     await sock.sendMessage(from, {
-      text: "🍿 Finding your episode...",
+      text: reply,
       edit: thinkingKey
     });
 
-    // 🔎 Search anime
-    const results = await searchAnime(intent.title);
-    if (!results.length) {
-      await sock.sendMessage(from, { text: "❌ Anime not found" });
-      return;
-    }
-
-    const anime = await chooseBestAnime(intent, results);
-    const episodes = await getEpisodes(anime.id);
-    if (!episodes.length) {
-      await sock.sendMessage(from, { text: "❌ Episodes unavailable" });
-      return;
-    }
-
-    // 🎯 Find episode
-    let episode = episodes.find(e => Number(e.number) === Number(intent.episode));
-    let notReleasedMessage = "";
-
-    if (!episode) {
-      const latestEpisode = episodes.reduce((max, ep) =>
-        Number(ep.number) > Number(max.number) ? ep : max
-      );
-      episode = latestEpisode;
-      notReleasedMessage =
-`⚠️ Episode ${intent.episode} is not released yet.
-Here is the latest available 👇
-
-`;
-    }
-
-    const stream = await generateStream(episode.id);
-    if (!stream) {
-      await sock.sendMessage(from, { text: "❌ Could not generate stream" });
-      return;
-    }
-
-    const caption =
-`${notReleasedMessage}🎬 ${anime.title}
-📺 Episode ${episode.number}: ${episode.title}
-▶️ ${stream.player}`;
-
-    // 🎬 Send episode card
-    if (anime.poster) {
-      await sock.sendMessage(from, {
-        image: { url: anime.poster },
-        caption
-      });
-    } else {
-      await sock.sendMessage(from, { text: caption });
-    }
-
-    // 🧾 Log usage
     await logWAUsage({
-  userJid: from,
-  username: from,
-  userMessage: text,
-  aiReply: caption
-});
-
-    // 🎯 Subtitle logic
-    if (intent.subtitle) {
-      const lang = intent.subtitleLang || "English";
-      const subs = await fetchAvailableSubtitles(episode.id);
-      const existing = subs.find(
-        s => s.lang.toLowerCase() === lang.toLowerCase()
-      );
-
-      if (existing) {
-        await sock.sendMessage(from, {
-          text: `🎯 Subtitle already available: ${existing.lang}`
-        });
-      } else {
-        await generateSubtitle(from, episode.id, lang, sock);
-      }
-    }
+      userJid: from,
+      username: from,
+      userMessage: text,
+      aiReply: reply
+    });
 
   } catch (err) {
-    logError("MAIN HANDLER", err);
-    await sock.sendMessage(msg.key.remoteJid, {
-      text: "⚠️ Something went wrong"
+    logError("GENERAL HANDLER", err);
+    await sock.sendMessage(from, {
+      text: "⚠️ Failed to process your message"
     });
-  } finally {
-    userLocks.delete(userId);
   }
 }
-
   sock.ev.on("creds.update", saveCreds);
 
   // 📩 MAIN MESSAGE HANDLER
@@ -629,5 +813,6 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
