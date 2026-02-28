@@ -419,20 +419,27 @@ async function getChapterImages(chapterUrl) {
 async function createTallImage(imageUrls) {
   const buffers = [];
 
-  // Download images
   for (const url of imageUrls) {
-    const { data } = await axios.get(url, { responseType: "arraybuffer" });
+    const { data } = await axios.get(url, {
+      responseType: "arraybuffer",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        Referer: "https://manhwazone.to/",
+        Origin: "https://manhwazone.to"
+      },
+      timeout: 30000
+    });
+
     buffers.push(Buffer.from(data));
   }
 
-  // Get metadata
   const metas = await Promise.all(
     buffers.map(b => sharp(b).metadata())
   );
 
   const targetWidth = Math.max(...metas.map(m => m.width));
 
-  // Resize all images to same width
   const resized = await Promise.all(
     buffers.map(b =>
       sharp(b)
@@ -967,6 +974,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
