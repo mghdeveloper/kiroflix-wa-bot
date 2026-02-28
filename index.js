@@ -392,9 +392,7 @@ async function getChapterImages(chapterPath) {
 async function handleManhwaRequest(text, from, sock) {
   const intent = await parseManhwaIntent(text);
   if (!intent || intent.notFound) {
-    await sock.sendMessage(from, {
-      text: "❌ Could not detect manhwa title"
-    });
+    await sock.sendMessage(from, { text: "❌ Could not detect manhwa title" });
     return;
   }
 
@@ -417,10 +415,7 @@ async function handleManhwaRequest(text, from, sock) {
   let chapter = details.chapters.find(c =>
     c.title.toLowerCase().includes(`chapter ${intent.chapter}`)
   );
-
-  if (!chapter) {
-    chapter = details.chapters[0];
-  }
+  if (!chapter) chapter = details.chapters[0];
 
   const chapterPath = chapter.url.split("asuracomic.net/")[1];
   const images = await getChapterImages(chapterPath);
@@ -430,7 +425,7 @@ async function handleManhwaRequest(text, from, sock) {
     return;
   }
 
-  // 🎨 Stylish Info Card
+  // 🎨 Stylish Info Card (first message)
   const caption = `
 📖 *${details.title}*
 ⭐ Rating: ${details.rating}
@@ -441,22 +436,28 @@ async function handleManhwaRequest(text, from, sock) {
 🔥 ${details.synopsis.substring(0, 200)}...
 `;
 
-  await sock.sendMessage(from, {
-    image: { url: details.poster },
-    caption
-  });
-
-  // 📸 Send Chapter Pages
-  for (let i = 0; i < images.length; i++) {
+  // Send poster + caption first
+  if (details.poster) {
     await sock.sendMessage(from, {
-      image: { url: images[i] },
-      caption: `Page ${i + 1}/${images.length}`
+      image: { url: details.poster },
+      caption
     });
+  } else {
+    await sock.sendMessage(from, { text: caption });
   }
 
-  await sock.sendMessage(from, {
-    text: "✅ End of chapter"
-  });
+  // 📸 Send Chapter Pages in batches of 10 to avoid WhatsApp limits
+  const batchSize = 10;
+  for (let i = 0; i < images.length; i += batchSize) {
+    const batch = images.slice(i, i + batchSize).map((img, idx) => ({
+      image: { url: img },
+      caption: idx === 0 ? `Page ${i + 1}/${images.length}` : undefined
+    }));
+
+    await sock.sendMessage(from, { media: batch });
+  }
+
+  await sock.sendMessage(from, { text: "✅ End of chapter" });
 }
 async function detectMessageType(text) {
   try {
@@ -890,6 +891,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
