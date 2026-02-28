@@ -157,24 +157,31 @@ async function searchAnime(title) {
 }
 async function generalReply(userText) {
   const prompt = `
-You are a friendly assistant for an anime episode bot.
+You are a friendly, helpful WhatsApp anime assistant.
 
-If the user is:
-- greeting
-- asking how the bot works
-- chatting outside anime requests
+User may:
+- greet the bot ("hi", "hello")
+- thank the bot ("thanks", "thank you")
+- ask how the bot works
+- chat casually
 
-Reply with ONE short friendly sentence inviting them to try:
-👉 send an anime name + episode number
+Your job:
+1️⃣ Reply in a friendly, natural tone and include imojies.
+2️⃣ Mention all features the bot now supports:
+   - Sending anime episodes
+   - Subtitle generation for episodes
+   - Manhwa/manga chapter reading
+3️⃣ Give suggestions if user says thanks or shows interest
+4️⃣ Keep it short (1-3 sentences max)
+5️⃣ Avoid repeating the same generic line
 
-Examples tone:
-"Hi 👋 Just send an anime title and episode number to start watching 🍿"
+User message: "${userText}"
 
-User message: ${userText}
+Respond ONLY as natural WhatsApp text, like a human.
 `;
 
   const res = await askAI(prompt);
-  return res || "👋 Send an anime title and episode number to start watching 🍿";
+  return res || "👋 Hi! Send an anime or manhwa to start watching or reading 🍿";
 }
 // -------------------- AI MATCH --------------------
 async function chooseBestAnime(intent, results) {
@@ -612,7 +619,37 @@ async function generateSubtitle(chatId, episodeId, lang = "English", sock) {
     return null;
   }
 }
-async function handleAnimeRequest(intent, originalText, from, thinkingKey) {
+
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState("auth");
+  const { version } = await fetchLatestBaileysVersion();
+
+  const sock = makeWASocket({
+    version,
+    logger: P({ level: "silent" }),
+    auth: state,
+    browser: ["Kiroflix Bot", "Chrome", "1.0"]
+  });
+
+  sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
+  if (qr) {
+    // Convert QR to data URL for browser
+    qrCodeDataURL = await qrcode.toDataURL(qr);
+    console.log("📲 QR code updated. Scan from your browser!");
+  }
+
+  if (connection === "open") {
+    console.log("✅ WhatsApp connected");
+    qrCodeDataURL = null; // clear QR after login
+  }
+
+  if (connection === "close") {
+    const shouldReconnect =
+      lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+    if (shouldReconnect) startBot();
+  }
+});
+  async function handleAnimeRequest(intent, originalText, from, thinkingKey) {
   try {
     // 🔄 Update thinking message
     await sock.sendMessage(from, {
@@ -713,35 +750,6 @@ Here is the latest available 👇
     });
   }
 }
-async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState("auth");
-  const { version } = await fetchLatestBaileysVersion();
-
-  const sock = makeWASocket({
-    version,
-    logger: P({ level: "silent" }),
-    auth: state,
-    browser: ["Kiroflix Bot", "Chrome", "1.0"]
-  });
-
-  sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
-  if (qr) {
-    // Convert QR to data URL for browser
-    qrCodeDataURL = await qrcode.toDataURL(qr);
-    console.log("📲 QR code updated. Scan from your browser!");
-  }
-
-  if (connection === "open") {
-    console.log("✅ WhatsApp connected");
-    qrCodeDataURL = null; // clear QR after login
-  }
-
-  if (connection === "close") {
-    const shouldReconnect =
-      lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-    if (shouldReconnect) startBot();
-  }
-});
   async function handleGeneralRequest(text, from, thinkingKey) {
   try {
     const reply = await generalReply(text);
@@ -882,6 +890,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
