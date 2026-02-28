@@ -329,6 +329,8 @@ User: ${text}
     return null;
   }
 }
+const sharp = require("sharp");
+
 // ===============================
 // 🔎 SEARCH MANHWA (V1)
 // ===============================
@@ -341,16 +343,14 @@ async function searchManhwa(title) {
 
     if (!data?.success) return [];
     return data.results || [];
-
   } catch (err) {
     logError("MANHWA SEARCH V1", err);
     return [];
   }
 }
 
-
 // ===============================
-// 🤖 AI BEST MATCH SELECTOR
+// 🤖 AI MATCH
 // ===============================
 async function chooseBestManhwa(intent, results) {
   try {
@@ -364,16 +364,7 @@ async function chooseBestManhwa(intent, results) {
 
     const prompt = `
 User searching: "${intent.title}"
-
-Select the BEST match.
-Prioritize:
-- Exact title match
-- Alt name match
-- Highest score
-- Highest popularity
-
-Return ONLY the id.
-
+Return ONLY the id of best match.
 ${JSON.stringify(minimal)}
 `;
 
@@ -381,15 +372,13 @@ ${JSON.stringify(minimal)}
     const id = res.match(/[a-z0-9\-]+/)?.[0];
 
     return results.find(r => r.id === id) || results[0];
-
-  } catch (err) {
+  } catch {
     return results[0];
   }
 }
 
-
 // ===============================
-// 📖 GET DETAILS (V1)
+// 📖 DETAILS V1
 // ===============================
 async function getManhwaDetails(id) {
   try {
@@ -400,16 +389,14 @@ async function getManhwaDetails(id) {
 
     if (!data?.success) return null;
     return data.data;
-
   } catch (err) {
-    logError("MANHWA DETAILS V1", err);
+    logError("DETAILS V1", err);
     return null;
   }
 }
 
-
 // ===============================
-// 🖼 FETCH CHAPTER IMAGES (V1)
+// 🖼 FETCH PAGES V1
 // ===============================
 async function getChapterImages(chapterUrl) {
   try {
@@ -420,19 +407,70 @@ async function getChapterImages(chapterUrl) {
 
     if (!data?.success) return [];
     return data.pages || [];
-
   } catch (err) {
-    logError("FETCH CHAPTER IMAGES V1", err);
+    logError("CHAPTER IMAGES V1", err);
     return [];
   }
 }
 
-
 // ===============================
-// 🚀 MAIN HANDLER
+// 🧩 MERGE IMAGES VERTICALLY
+// ===============================
+async function createTallImage(imageUrls) {
+  const buffers = [];
+
+  // Download images
+  for (const url of imageUrls) {
+    const { data } = await axios.get(url, { responseType: "arraybuffer" });
+    buffers.push(Buffer.from(data));
+  }
+
+  // Get metadata
+  const metas = await Promise.all(
+    buffers.map(b => sharp(b).metadata())
+  );
+
+  const targetWidth = Math.max(...metas.map(m => m.width));
+
+  // Resize all images to same width
+  const resized = await Promise.all(
+    buffers.map(b =>
+      sharp(b)
+        .resize({ width: targetWidth })
+        .toBuffer()
+    )
+  );
+
+  const resizedMetas = await Promise.all(
+    resized.map(b => sharp(b).metadata())
+  );
+
+  const totalHeight = resizedMetas.reduce((sum, m) => sum + m.height, 0);
+
+  let top = 0;
+
+  const composite = resized.map((img, i) => {
+    const obj = { input: img, top, left: 0 };
+    top += resizedMetas[i].height;
+    return obj;
+  });
+
+  return await sharp({
+    create: {
+      width: targetWidth,
+      height: totalHeight,
+      channels: 3,
+      background: "#ffffff"
+    }
+  })
+    .composite(composite)
+    .jpeg({ quality: 85 })
+    .toBuffer();
+}
+// ===============================
+// 🚀 MAIN HANDLER (TALL MODE)
 // ===============================
 async function handleManhwaRequest(text, from, sock) {
-
   const intent = await parseManhwaIntent(text);
 
   if (!intent || intent.notFound) {
@@ -443,7 +481,6 @@ async function handleManhwaRequest(text, from, sock) {
   await sock.sendMessage(from, { text: "📚 Searching manhwa..." });
 
   const results = await searchManhwa(intent.title);
-
   if (!results.length) {
     await sock.sendMessage(from, { text: "❌ Manhwa not found." });
     return;
@@ -457,9 +494,6 @@ async function handleManhwaRequest(text, from, sock) {
     return;
   }
 
-  // ===============================
-  // 📚 Chapter Selection (NEW LOGIC)
-  // ===============================
   let chapter;
 
   if (intent.chapter) {
@@ -468,21 +502,15 @@ async function handleManhwaRequest(text, from, sock) {
     );
   }
 
-  // fallback to latest (already sorted newest first)
-  if (!chapter) {
-    chapter = details.chapters[0];
-  }
+  if (!chapter) chapter = details.chapters[0];
 
   if (!chapter) {
     await sock.sendMessage(from, { text: "❌ No chapters available." });
     return;
   }
 
-  await sock.sendMessage(from, { text: `📖 Loading ${chapter.name}...` });
+  await sock.sendMessage(from, { text: `📖 Creating chapter image...` });
 
-  // ===============================
-  // 🖼 FETCH IMAGES USING FULL URL
-  // ===============================
   const images = await getChapterImages(chapter.url);
 
   if (!images.length) {
@@ -490,44 +518,22 @@ async function handleManhwaRequest(text, from, sock) {
     return;
   }
 
-  // ===============================
-  // 📌 INFO CARD
-  // ===============================
+  // 🔥 CREATE TALL IMAGE
+  const tallImageBuffer = await createTallImage(images);
+
   const caption = `
 📖 *${details.title}*
+📚 ${chapter.name}
 ⭐ Score: ${details.score || "N/A"}
 📌 Status: ${details.status || "Unknown"}
-📚 Chapter: ${chapter.name}
-🖊 Author: ${details.author || "Unknown"}
-🏷 Genres: ${details.genres?.join(", ") || "N/A"}
-
-🔥 ${details.synopsis?.substring(0, 250) || "No synopsis available."}...
 `;
 
-  if (details.poster) {
-    await sock.sendMessage(from, {
-      image: { url: details.poster },
-      caption
-    });
-  } else {
-    await sock.sendMessage(from, { text: caption });
-  }
+  await sock.sendMessage(from, {
+    image: tallImageBuffer,
+    caption
+  });
 
-  // ===============================
-  // 📄 SEND CHAPTER PAGES
-  // ===============================
-  for (let i = 0; i < images.length; i++) {
-
-    await sock.sendMessage(from, {
-      image: { url: images[i] },
-      caption: `📄 Page ${i + 1}/${images.length}`
-    });
-
-    // anti-flood delay
-    await new Promise(res => setTimeout(res, 250));
-  }
-
-  await sock.sendMessage(from, { text: "✅ End of chapter." });
+  await sock.sendMessage(from, { text: "✅ Chapter delivered in one image." });
 }
 async function detectMessageType(text) {
   try {
@@ -961,6 +967,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
