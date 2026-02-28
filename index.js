@@ -411,7 +411,6 @@ async function handleManhwaRequest(text, from, sock) {
     return;
   }
 
-  // 🎯 Find Chapter
   let chapter = details.chapters.find(c =>
     c.title.toLowerCase().includes(`chapter ${intent.chapter}`)
   );
@@ -419,13 +418,12 @@ async function handleManhwaRequest(text, from, sock) {
 
   const chapterPath = chapter.url.split("asuracomic.net/")[1];
   const images = await getChapterImages(chapterPath);
-
   if (!images.length) {
     await sock.sendMessage(from, { text: "❌ Chapter images unavailable" });
     return;
   }
 
-  // 🎨 Stylish Info Card (first message)
+  // Info card
   const caption = `
 📖 *${details.title}*
 ⭐ Rating: ${details.rating}
@@ -436,25 +434,21 @@ async function handleManhwaRequest(text, from, sock) {
 🔥 ${details.synopsis.substring(0, 200)}...
 `;
 
-  // Send poster + caption first
   if (details.poster) {
-    await sock.sendMessage(from, {
-      image: { url: details.poster },
-      caption
-    });
+    await sock.sendMessage(from, { image: { url: details.poster }, caption });
   } else {
     await sock.sendMessage(from, { text: caption });
   }
 
-  // 📸 Send Chapter Pages in batches of 10 to avoid WhatsApp limits
-  const batchSize = 10;
-  for (let i = 0; i < images.length; i += batchSize) {
-    const batch = images.slice(i, i + batchSize).map((img, idx) => ({
-      image: { url: img },
-      caption: idx === 0 ? `Page ${i + 1}/${images.length}` : undefined
-    }));
+  // Send images **one by one with a small delay**
+  for (let i = 0; i < images.length; i++) {
+    await sock.sendMessage(from, {
+      image: { url: images[i] },
+      caption: `Page ${i + 1}/${images.length}`
+    });
 
-    await sock.sendMessage(from, { media: batch });
+    // Small delay to avoid flooding
+    await new Promise(res => setTimeout(res, 300));
   }
 
   await sock.sendMessage(from, { text: "✅ End of chapter" });
@@ -891,6 +885,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
