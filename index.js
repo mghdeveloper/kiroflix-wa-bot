@@ -501,24 +501,23 @@ async function normalizeImages(buffers, targetWidth = 1200) {
 // 📄 IMAGES TO PDF
 // ===============================
 async function imagesToPDF(images) {
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ autoFirstPage: false });
-    const chunks = [];
+  const doc = new PDFDocument({ autoFirstPage: false });
+  const chunks = [];
 
-    doc.on("data", (chunk) => chunks.push(chunk));
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
-    doc.on("error", reject);
+  doc.on("data", chunk => chunks.push(chunk));
+  const endPromise = new Promise((resolve) =>
+    doc.on("end", () => resolve(Buffer.concat(chunks)))
+  );
 
-    images.forEach((img) => {
-      const { width, height } = sharp(img).metadataSync();
-      doc.addPage({ size: [width, height] });
-      doc.image(img, 0, 0, { width, height });
-    });
+  for (const img of images) {
+    const { width = 1200, height = 1600 } = await sharp(img).metadata();
+    doc.addPage({ size: [width, height] });
+    doc.image(img, 0, 0, { width, height });
+  }
 
-    doc.end();
-  });
+  doc.end();
+  return endPromise;
 }
-
 // ===============================
 // 🚀 MAIN HANDLER
 // ===============================
@@ -547,7 +546,7 @@ async function handleManhwaRequest(text, from, sock) {
     }
 
     // ===== Chapter Selection by NUMBER, not id =====
-    let chapter = details.chapters.find(c => c.id === intent.chapter);
+    let chapter = details.chapters.find(c => c.chapter_no === intent.chapter);
 if (!chapter) chapter = details.chapters[0];
 logResponse("SELECTED_CHAPTER", chapter);
 
@@ -1034,6 +1033,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
