@@ -353,7 +353,6 @@ User: ${text}
     return null;
   }
 }
-
 // ===============================
 // 🔎 SEARCH MANHWA (V1)
 // ===============================
@@ -367,7 +366,6 @@ async function searchManhwa(title) {
     logResponse("SEARCH_MANHWA", data);
     if (!data?.success) return [];
     return data.results || [];
-
   } catch (err) {
     logResponse("SEARCH_MANHWA_ERROR", { error: err.message });
     return [];
@@ -410,7 +408,6 @@ ${JSON.stringify(minimal)}
     logResponse("AI_BEST_MATCH_CHOSEN", best);
 
     return best;
-
   } catch (err) {
     logResponse("AI_BEST_MATCH_ERROR", { error: err.message });
     return results[0];
@@ -430,7 +427,6 @@ async function getManhwaDetails(id) {
     logResponse("MANHWA_DETAILS", data);
     if (!data?.success) return null;
     return data.data;
-
   } catch (err) {
     logResponse("MANHWA_DETAILS_ERROR", { error: err.message });
     return null;
@@ -450,7 +446,6 @@ async function getChapterImages(chapterUrl) {
     logResponse("CHAPTER_IMAGES", data);
     if (!data?.success) return [];
     return data.pages || [];
-
   } catch (err) {
     logResponse("CHAPTER_IMAGES_ERROR", { error: err.message });
     return [];
@@ -458,11 +453,11 @@ async function getChapterImages(chapterUrl) {
 }
 
 // ===============================
-// 📥 DOWNLOAD IMAGES
+// 📥 DOWNLOAD IMAGES WITH PROXY FALLBACK
 // ===============================
 async function downloadImagesInParallel(images) {
   const buffers = await Promise.all(
-    images.map((url) =>
+    images.map(url =>
       downloadLimit(async () => {
         try {
           const response = await axios.get(url, {
@@ -472,8 +467,16 @@ async function downloadImagesInParallel(images) {
           });
           return Buffer.from(response.data);
         } catch (err) {
-          logResponse("IMAGE_DOWNLOAD_FAIL", url);
-          return null;
+          logResponse("IMAGE_DOWNLOAD_FAIL_NORMAL", url);
+          // fallback via proxy
+          try {
+            const proxyUrl = `https://image-fetcher-1.onrender.com/fetch?url=${encodeURIComponent(url)}`;
+            const proxyRes = await axios.get(proxyUrl, { responseType: "arraybuffer", timeout: 20000 });
+            return Buffer.from(proxyRes.data);
+          } catch (proxyErr) {
+            logResponse("IMAGE_DOWNLOAD_FAIL_PROXY", url);
+            return null;
+          }
         }
       })
     )
@@ -487,7 +490,7 @@ async function downloadImagesInParallel(images) {
 // ===============================
 async function normalizeImages(buffers, targetWidth = 1200) {
   return Promise.all(
-    buffers.map(async (buffer) => {
+    buffers.map(async buffer => {
       return sharp(buffer)
         .rotate()
         .resize(targetWidth, null, { fit: "inside", withoutEnlargement: true })
@@ -498,26 +501,29 @@ async function normalizeImages(buffers, targetWidth = 1200) {
 }
 
 // ===============================
-// 📄 IMAGES TO PDF
+// 📄 IMAGES TO PDF (Reader-Friendly)
 // ===============================
 async function imagesToPDF(images) {
   const doc = new PDFDocument({ autoFirstPage: false });
   const chunks = [];
 
   doc.on("data", chunk => chunks.push(chunk));
-  const endPromise = new Promise((resolve) =>
+  const endPromise = new Promise(resolve =>
     doc.on("end", () => resolve(Buffer.concat(chunks)))
   );
 
+  const PAGE_WIDTH = 1200; // match normalized images
+
   for (const img of images) {
-    const { width = 1200, height = 1600 } = await sharp(img).metadata();
-    doc.addPage({ size: [width, height] });
-    doc.image(img, 0, 0, { width, height });
+    const { height } = await sharp(img).metadata();
+    doc.addPage({ size: [PAGE_WIDTH, height] });
+    doc.image(img, 0, 0, { width: PAGE_WIDTH });
   }
 
   doc.end();
   return endPromise;
 }
+
 // ===============================
 // 🚀 MAIN HANDLER
 // ===============================
@@ -547,8 +553,8 @@ async function handleManhwaRequest(text, from, sock) {
 
     // ===== Chapter Selection by NUMBER, not id =====
     let chapter = details.chapters.find(c => c.chapter_no === intent.chapter);
-if (!chapter) chapter = details.chapters[0];
-logResponse("SELECTED_CHAPTER", chapter);
+    if (!chapter) chapter = details.chapters[0];
+    logResponse("SELECTED_CHAPTER", chapter);
 
     if (!chapter) {
       await sock.sendMessage(from, { text: "❌ No chapters available." });
@@ -590,7 +596,7 @@ logResponse("SELECTED_CHAPTER", chapter);
 
     await sock.sendMessage(from, {
       document: pdfBuffer,
-      fileName: `${details.title}_Chapter_${chapter.chapter}.pdf`,
+      fileName: `${details.title}_Chapter_${chapter.chapter_no}.pdf`,
       caption
     });
 
@@ -1033,6 +1039,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
