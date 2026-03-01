@@ -13,8 +13,6 @@ const express = require("express");
 const qrcode = require("qrcode"); // instead of qrcode-terminal
 const app = express();
 const PORT = process.env.PORT || 3000;
-const PDFDocument = require("pdfkit");
-const sharp = require("sharp");
 const pLimit = require("p-limit");
 const downloadLimit = pLimit(5);
 let qrCodeDataURL = null; // store latest QR code
@@ -301,6 +299,19 @@ async function fetchAvailableSubtitles(episodeId) {
     return [];
   }
 }
+const sharp = require("sharp");
+const PDFDocument = require("pdfkit");
+
+// ===============================
+// 🔹 UTILITY LOG
+// ===============================
+function logResponse(tag, data) {
+  console.log(`[${tag}]`, JSON.stringify(data, null, 2));
+}
+
+// ===============================
+// 🔹 MANHWA INTENT PARSER
+// ===============================
 async function parseManhwaIntent(text) {
   try {
     const prompt = `
@@ -327,16 +338,22 @@ User: ${text}
 `;
 
     let res = await askAI(prompt);
+    logResponse("AI_INTENT_RAW", res);
+
     res = res.replace(/```json|```/gi, "").trim();
     const json = res.match(/\{[\s\S]*\}/)?.[0];
-    if (!json) throw new Error("No JSON");
+    if (!json) throw new Error("No JSON found in AI response");
 
-    return JSON.parse(json);
+    const parsed = JSON.parse(json);
+    logResponse("AI_INTENT_PARSED", parsed);
+    return parsed;
+
   } catch (err) {
-    logError("MANHWA INTENT", err);
+    logResponse("MANHWA_INTENT_ERROR", { error: err.message });
     return null;
   }
 }
+
 // ===============================
 // 🔎 SEARCH MANHWA (V1)
 // ===============================
@@ -347,15 +364,15 @@ async function searchManhwa(title) {
       { params: { q: title } }
     );
 
+    logResponse("SEARCH_MANHWA", data);
     if (!data?.success) return [];
     return data.results || [];
 
   } catch (err) {
-    logError("MANHWA SEARCH V1", err);
+    logResponse("SEARCH_MANHWA_ERROR", { error: err.message });
     return [];
   }
 }
-
 
 // ===============================
 // 🤖 AI BEST MATCH SELECTOR
@@ -386,18 +403,22 @@ ${JSON.stringify(minimal)}
 `;
 
     const res = await askAI(prompt);
-    const id = res.match(/[a-z0-9\-]+/)?.[0];
+    logResponse("AI_BEST_MATCH_RAW", res);
 
-    return results.find(r => r.id === id) || results[0];
+    const id = res.match(/[a-z0-9\-]+/)?.[0];
+    const best = results.find(r => r.id === id) || results[0];
+    logResponse("AI_BEST_MATCH_CHOSEN", best);
+
+    return best;
 
   } catch (err) {
+    logResponse("AI_BEST_MATCH_ERROR", { error: err.message });
     return results[0];
   }
 }
 
-
 // ===============================
-// 📖 GET DETAILS (V1)
+// 📖 GET MANHWA DETAILS
 // ===============================
 async function getManhwaDetails(id) {
   try {
@@ -406,18 +427,18 @@ async function getManhwaDetails(id) {
       { params: { id } }
     );
 
+    logResponse("MANHWA_DETAILS", data);
     if (!data?.success) return null;
     return data.data;
 
   } catch (err) {
-    logError("MANHWA DETAILS V1", err);
+    logResponse("MANHWA_DETAILS_ERROR", { error: err.message });
     return null;
   }
 }
 
-
 // ===============================
-// 🖼 FETCH CHAPTER IMAGES (V2)
+// 🖼 GET CHAPTER IMAGES
 // ===============================
 async function getChapterImages(chapterUrl) {
   try {
@@ -426,15 +447,19 @@ async function getChapterImages(chapterUrl) {
       { params: { url: chapterUrl } }
     );
 
+    logResponse("CHAPTER_IMAGES", data);
     if (!data?.success) return [];
     return data.pages || [];
 
   } catch (err) {
-    logError("FETCH CHAPTER IMAGES V2", err);
+    logResponse("CHAPTER_IMAGES_ERROR", { error: err.message });
     return [];
   }
 }
 
+// ===============================
+// 📥 DOWNLOAD IMAGES
+// ===============================
 async function downloadImagesInParallel(images) {
   const buffers = await Promise.all(
     images.map((url) =>
@@ -443,14 +468,11 @@ async function downloadImagesInParallel(images) {
           const response = await axios.get(url, {
             responseType: "arraybuffer",
             timeout: 20000,
-            headers: {
-              "User-Agent": "Mozilla/5.0",
-              "Referer": "https://manhwazone.to/"
-            }
+            headers: { "User-Agent": "Mozilla/5.0", "Referer": "https://manhwazone.to/" }
           });
           return Buffer.from(response.data);
         } catch (err) {
-          logError("IMAGE DOWNLOAD FAIL", url);
+          logResponse("IMAGE_DOWNLOAD_FAIL", url);
           return null;
         }
       })
@@ -461,13 +483,13 @@ async function downloadImagesInParallel(images) {
 }
 
 // ===============================
-// 🔹 NORMALIZE IMAGES (no merge)
+// 🔹 NORMALIZE IMAGES
 // ===============================
 async function normalizeImages(buffers, targetWidth = 1200) {
   return Promise.all(
     buffers.map(async (buffer) => {
       return sharp(buffer)
-        .rotate() // fix EXIF orientation
+        .rotate()
         .resize(targetWidth, null, { fit: "inside", withoutEnlargement: true })
         .jpeg({ quality: 85 })
         .toBuffer();
@@ -476,7 +498,29 @@ async function normalizeImages(buffers, targetWidth = 1200) {
 }
 
 // ===============================
-// 🚀 MAIN HANDLER (SAFE VERSION)
+// 📄 IMAGES TO PDF
+// ===============================
+async function imagesToPDF(images) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ autoFirstPage: false });
+    const chunks = [];
+
+    doc.on("data", (chunk) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    images.forEach((img) => {
+      const { width, height } = sharp(img).metadataSync();
+      doc.addPage({ size: [width, height] });
+      doc.image(img, 0, 0, { width, height });
+    });
+
+    doc.end();
+  });
+}
+
+// ===============================
+// 🚀 MAIN HANDLER
 // ===============================
 async function handleManhwaRequest(text, from, sock) {
   try {
@@ -490,7 +534,6 @@ async function handleManhwaRequest(text, from, sock) {
     await sock.sendMessage(from, { text: "📚 Searching manhwa..." });
 
     const results = await searchManhwa(intent.title);
-
     if (!results.length) {
       await sock.sendMessage(from, { text: "❌ Manhwa not found." });
       return;
@@ -498,23 +541,15 @@ async function handleManhwaRequest(text, from, sock) {
 
     const manhwa = await chooseBestManhwa(intent, results);
     const details = await getManhwaDetails(manhwa.id);
-
     if (!details) {
       await sock.sendMessage(from, { text: "❌ Failed to load details." });
       return;
     }
 
-    // ===== Chapter Selection =====
-    // ===== Chapter Selection =====
-let chapter;
-
-if (intent.chapter) {
-  // Match chapter number by `id`
-  chapter = details.chapters.find(c => Number(c.id) === Number(intent.chapter));
-}
-
-// Fallback to first/latest chapter if not found
+    // ===== Chapter Selection by NUMBER, not id =====
+    let chapter = details.chapters.find(c => c.id === intent.chapter);
 if (!chapter) chapter = details.chapters[0];
+logResponse("SELECTED_CHAPTER", chapter);
 
     if (!chapter) {
       await sock.sendMessage(from, { text: "❌ No chapters available." });
@@ -523,26 +558,24 @@ if (!chapter) chapter = details.chapters[0];
 
     await sock.sendMessage(from, { text: `📖 Loading ${chapter.name}...` });
 
-    // ===== Fetch Image URLs =====
     const imageUrls = await getChapterImages(chapter.url);
-
     if (!imageUrls.length) {
       await sock.sendMessage(from, { text: "❌ Chapter images unavailable." });
       return;
     }
 
     await sock.sendMessage(from, { text: "⬇️ Downloading pages..." });
-
     const imageBuffers = await downloadImagesInParallel(imageUrls);
-
     if (!imageBuffers.length) {
       await sock.sendMessage(from, { text: "❌ Failed to download images." });
       return;
     }
 
     await sock.sendMessage(from, { text: "🧱 Normalizing pages..." });
-
     const normalizedPages = await normalizeImages(imageBuffers);
+
+    await sock.sendMessage(from, { text: "📄 Merging pages into PDF..." });
+    const pdfBuffer = await imagesToPDF(normalizedPages);
 
     // ===== Info Card =====
     const caption = `
@@ -556,29 +589,16 @@ if (!chapter) chapter = details.chapters[0];
 🔥 ${details.synopsis?.substring(0, 250) || "No synopsis available."}...
 `;
 
-    if (details.poster) {
-      await sock.sendMessage(from, {
-        image: { url: details.poster },
-        caption
-      });
-    } else {
-      await sock.sendMessage(from, { text: caption });
-    }
-
-    // ===== Send Pages Individually =====
-    for (let i = 0; i < normalizedPages.length; i++) {
-      await sock.sendMessage(from, {
-        image: normalizedPages[i],
-        caption: `📄 Page ${i + 1}/${normalizedPages.length}`
-      });
-
-      await new Promise(res => setTimeout(res, 300)); // small delay
-    }
+    await sock.sendMessage(from, {
+      document: pdfBuffer,
+      fileName: `${details.title}_Chapter_${chapter.chapter}.pdf`,
+      caption
+    });
 
     await sock.sendMessage(from, { text: "✅ End of chapter." });
 
   } catch (err) {
-    logError("MAIN MANHWA HANDLER SAFE", err);
+    logResponse("MAIN_HANDLER_ERROR", { error: err.message });
     await sock.sendMessage(from, { text: "❌ Unexpected error occurred." });
   }
 }
@@ -1014,6 +1034,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
