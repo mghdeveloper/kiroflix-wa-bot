@@ -354,7 +354,7 @@ User: ${text}
   }
 }
 // ===============================
-// 🔎 SEARCH MANHWA (V1)
+// 🔎 SEARCH MANHWA
 // ===============================
 async function searchManhwa(title) {
   try {
@@ -362,7 +362,6 @@ async function searchManhwa(title) {
       "https://kiroflix.site/backend/manga_search-v1.php",
       { params: { q: title } }
     );
-
     logResponse("SEARCH_MANHWA", data);
     if (!data?.success) return [];
     return data.results || [];
@@ -423,7 +422,6 @@ async function getManhwaDetails(id) {
       "https://kiroflix.site/backend/manga-details_v1.php",
       { params: { id } }
     );
-
     logResponse("MANHWA_DETAILS", data);
     if (!data?.success) return null;
     return data.data;
@@ -442,7 +440,6 @@ async function getChapterImages(chapterUrl) {
       "https://kiroflix.site/backend/chapter_images_v1.php",
       { params: { url: chapterUrl } }
     );
-
     logResponse("CHAPTER_IMAGES", data);
     if (!data?.success) return [];
     return data.pages || [];
@@ -453,71 +450,83 @@ async function getChapterImages(chapterUrl) {
 }
 
 // ===============================
-// 📥 DOWNLOAD IMAGES WITH PROXY FALLBACK
+// 📥 DOWNLOAD IMAGES DIRECTLY VIA PROXY WITH PROGRESS
 // ===============================
-async function downloadImagesInParallel(images) {
-  const buffers = await Promise.all(
-    images.map(url =>
-      downloadLimit(async () => {
-        try {
-          const response = await axios.get(url, {
-            responseType: "arraybuffer",
-            timeout: 20000,
-            headers: { "User-Agent": "Mozilla/5.0", "Referer": "https://manhwazone.to/" }
-          });
-          return Buffer.from(response.data);
-        } catch (err) {
-          logResponse("IMAGE_DOWNLOAD_FAIL_NORMAL", url);
-          // fallback via proxy
-          try {
-            const proxyUrl = `https://image-fetcher-1.onrender.com/fetch?url=${encodeURIComponent(url)}`;
-            const proxyRes = await axios.get(proxyUrl, { responseType: "arraybuffer", timeout: 20000 });
-            return Buffer.from(proxyRes.data);
-          } catch (proxyErr) {
-            logResponse("IMAGE_DOWNLOAD_FAIL_PROXY", url);
-            return null;
-          }
-        }
-      })
-    )
-  );
+async function downloadImagesWithProgress(images, sock, from) {
+  const buffers = [];
+  for (let i = 0; i < images.length; i++) {
+    let buffer = null;
+    const url = images[i];
 
-  return buffers.filter(Boolean);
+    try {
+      const res = await axios.get(url, { responseType: "arraybuffer", timeout: 20000 });
+      buffer = Buffer.from(res.data);
+    } catch (err) {
+      try {
+        const proxyUrl = `https://image-fetcher-1.onrender.com/fetch?url=${encodeURIComponent(url)}`;
+        const proxyRes = await axios.get(proxyUrl, { responseType: "arraybuffer", timeout: 20000 });
+        buffer = Buffer.from(proxyRes.data);
+      } catch (proxyErr) {
+        logResponse("IMAGE_DOWNLOAD_FAIL", url);
+      }
+    }
+
+    if (buffer) buffers.push(buffer);
+
+    // Progress every 2 images
+    if (i % 2 === 0 || i === images.length - 1) {
+      await sock.sendMessage(from, { text: `⬇️ Downloading pages... ${i + 1}/${images.length}` });
+    }
+  }
+
+  return buffers;
 }
 
 // ===============================
-// 🔹 NORMALIZE IMAGES
+// 🔹 NORMALIZE & SPLIT TALL IMAGES
 // ===============================
-async function normalizeImages(buffers, targetWidth = 1200) {
-  return Promise.all(
-    buffers.map(async buffer => {
-      return sharp(buffer)
-        .rotate()
-        .resize(targetWidth, null, { fit: "inside", withoutEnlargement: true })
-        .jpeg({ quality: 85 })
-        .toBuffer();
-    })
-  );
+async function normalizeAndSplitImages(buffers, targetWidth = 1200, maxHeight = 2000) {
+  const finalPages = [];
+
+  for (const buffer of buffers) {
+    const img = await sharp(buffer).rotate().resize(targetWidth, null, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+    const metadata = await sharp(img).metadata();
+
+    if (metadata.height <= maxHeight) {
+      finalPages.push(img);
+    } else {
+      let top = 0;
+      while (top < metadata.height) {
+        const chunkHeight = Math.min(maxHeight, metadata.height - top);
+        const chunk = await sharp(img).extract({ left: 0, top, width: metadata.width, height: chunkHeight }).toBuffer();
+        finalPages.push(chunk);
+        top += chunkHeight;
+      }
+    }
+  }
+
+  return finalPages;
 }
 
 // ===============================
-// 📄 IMAGES TO PDF (Reader-Friendly)
+// 📄 CREATE READER-FRIENDLY PDF
 // ===============================
-async function imagesToPDF(images) {
+async function imagesToPDF(images, sock, from) {
   const doc = new PDFDocument({ autoFirstPage: false });
   const chunks = [];
 
   doc.on("data", chunk => chunks.push(chunk));
-  const endPromise = new Promise(resolve =>
-    doc.on("end", () => resolve(Buffer.concat(chunks)))
-  );
+  const endPromise = new Promise(resolve => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-  const PAGE_WIDTH = 1200; // match normalized images
+  for (let i = 0; i < images.length; i++) {
+    const img = images[i];
+    const metadata = await sharp(img).metadata();
+    doc.addPage({ size: [metadata.width, metadata.height] });
+    doc.image(img, 0, 0, { width: metadata.width, height: metadata.height });
 
-  for (const img of images) {
-    const { height } = await sharp(img).metadata();
-    doc.addPage({ size: [PAGE_WIDTH, height] });
-    doc.image(img, 0, 0, { width: PAGE_WIDTH });
+    if (i % 2 === 0 || i === images.length - 1) {
+      await sock.sendMessage(from, { text: `📄 Generating PDF... ${i + 1}/${images.length}` });
+    }
   }
 
   doc.end();
@@ -530,59 +539,30 @@ async function imagesToPDF(images) {
 async function handleManhwaRequest(text, from, sock) {
   try {
     const intent = await parseManhwaIntent(text);
-
-    if (!intent || intent.notFound) {
-      await sock.sendMessage(from, { text: "❌ Could not detect manhwa title." });
-      return;
-    }
+    if (!intent || intent.notFound) return await sock.sendMessage(from, { text: "❌ Could not detect manhwa title." });
 
     await sock.sendMessage(from, { text: "📚 Searching manhwa..." });
-
     const results = await searchManhwa(intent.title);
-    if (!results.length) {
-      await sock.sendMessage(from, { text: "❌ Manhwa not found." });
-      return;
-    }
+    if (!results.length) return await sock.sendMessage(from, { text: "❌ Manhwa not found." });
 
     const manhwa = await chooseBestManhwa(intent, results);
     const details = await getManhwaDetails(manhwa.id);
-    if (!details) {
-      await sock.sendMessage(from, { text: "❌ Failed to load details." });
-      return;
-    }
+    if (!details) return await sock.sendMessage(from, { text: "❌ Failed to load details." });
 
-    // ===== Chapter Selection by NUMBER, not id =====
-    let chapter = details.chapters.find(c => c.chapter_no === intent.chapter);
-    if (!chapter) chapter = details.chapters[0];
-    logResponse("SELECTED_CHAPTER", chapter);
-
-    if (!chapter) {
-      await sock.sendMessage(from, { text: "❌ No chapters available." });
-      return;
-    }
+    let chapter = details.chapters.find(c => c.chapter_no === intent.chapter) || details.chapters[0];
+    if (!chapter) return await sock.sendMessage(from, { text: "❌ No chapters available." });
 
     await sock.sendMessage(from, { text: `📖 Loading ${chapter.name}...` });
-
     const imageUrls = await getChapterImages(chapter.url);
-    if (!imageUrls.length) {
-      await sock.sendMessage(from, { text: "❌ Chapter images unavailable." });
-      return;
-    }
+    if (!imageUrls.length) return await sock.sendMessage(from, { text: "❌ Chapter images unavailable." });
 
-    await sock.sendMessage(from, { text: "⬇️ Downloading pages..." });
-    const imageBuffers = await downloadImagesInParallel(imageUrls);
-    if (!imageBuffers.length) {
-      await sock.sendMessage(from, { text: "❌ Failed to download images." });
-      return;
-    }
+    const imageBuffers = await downloadImagesWithProgress(imageUrls, sock, from);
+    if (!imageBuffers.length) return await sock.sendMessage(from, { text: "❌ Failed to download images." });
 
-    await sock.sendMessage(from, { text: "🧱 Normalizing pages..." });
-    const normalizedPages = await normalizeImages(imageBuffers);
+    const finalPages = await normalizeAndSplitImages(imageBuffers);
 
-    await sock.sendMessage(from, { text: "📄 Merging pages into PDF..." });
-    const pdfBuffer = await imagesToPDF(normalizedPages);
+    const pdfBuffer = await imagesToPDF(finalPages, sock, from);
 
-    // ===== Info Card =====
     const caption = `
 📖 *${details.title}*
 ⭐ Score: ${details.score || "N/A"}
@@ -600,7 +580,7 @@ async function handleManhwaRequest(text, from, sock) {
       caption
     });
 
-    await sock.sendMessage(from, { text: "✅ End of chapter." });
+    await sock.sendMessage(from, { text: "✅ Chapter ready for reading." });
 
   } catch (err) {
     logResponse("MAIN_HANDLER_ERROR", { error: err.message });
@@ -1039,6 +1019,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
