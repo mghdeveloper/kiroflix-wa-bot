@@ -200,6 +200,11 @@ async function chooseBestAnime(intent, results) {
 User searching: "${intent.title}"${intent.season ? " season " + intent.season : ""}
 Return ONLY the id of the best match from this list:
 ${JSON.stringify(minimal)}
+
+Rules:
+1. Match the title case-insensitively.
+2. If multiple results have the same title, return the one with the highest id (newest).
+3. Do not return anything else, only the id.
 `;
 
     const res = await askAI(prompt);
@@ -1069,6 +1074,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
