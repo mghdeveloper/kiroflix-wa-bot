@@ -505,9 +505,16 @@ async function handleManhwaRequest(text, from, sock) {
     }
 
     // ===== Chapter Selection =====
-    let chapter = intent.chapter
-      ? details.chapters.find(c => Number(c.chapter_no) === Number(intent.chapter))
-      : details.chapters[0];
+    // ===== Chapter Selection =====
+let chapter;
+
+if (intent.chapter) {
+  // Match chapter number by `id`
+  chapter = details.chapters.find(c => Number(c.id) === Number(intent.chapter));
+}
+
+// Fallback to first/latest chapter if not found
+if (!chapter) chapter = details.chapters[0];
 
     if (!chapter) {
       await sock.sendMessage(from, { text: "❌ No chapters available." });
@@ -1007,6 +1014,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
