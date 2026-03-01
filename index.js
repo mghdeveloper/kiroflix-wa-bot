@@ -13,7 +13,10 @@ const express = require("express");
 const qrcode = require("qrcode"); // instead of qrcode-terminal
 const app = express();
 const PORT = process.env.PORT || 3000;
-
+const PDFDocument = require("pdfkit");
+const sharp = require("sharp");
+const pLimit = require("p-limit");
+const downloadLimit = pLimit(5);
 let qrCodeDataURL = null; // store latest QR code
 
 app.get("/", async (_, res) => {
@@ -426,74 +429,162 @@ async function getChapterImages(chapterUrl) {
     return [];
   }
 }
+async function downloadImagesInParallel(images) {
+  const buffers = await Promise.all(
+    images.map((url) =>
+      downloadLimit(async () => {
+        try {
+          const response = await axios.get(url, {
+            responseType: "arraybuffer",
+            timeout: 20000,
+            headers: {
+              "User-Agent": "Mozilla/5.0",
+              "Referer": "https://manhwazone.to/"
+            }
+          });
+
+          return Buffer.from(response.data);
+        } catch (err) {
+          logError("IMAGE DOWNLOAD FAIL", url);
+          return null;
+        }
+      })
+    )
+  );
+
+  return buffers.filter(Boolean);
+}
+async function buildUniformPages(buffers, targetWidth = 1200, pageHeight = 2000) {
+  let pages = [];
+  let currentImages = [];
+  let currentHeight = 0;
+
+  for (const buffer of buffers) {
+    const resized = await sharp(buffer)
+      .resize({ width: targetWidth })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+
+    const meta = await sharp(resized).metadata();
+
+    if (currentHeight + meta.height > pageHeight && currentImages.length) {
+      pages.push(await mergePage(currentImages, targetWidth, pageHeight));
+      currentImages = [];
+      currentHeight = 0;
+    }
+
+    currentImages.push(resized);
+    currentHeight += meta.height;
+  }
+
+  if (currentImages.length) {
+    pages.push(await mergePage(currentImages, targetWidth, pageHeight));
+  }
+
+  return pages;
+}
+async function mergePage(images, width, height) {
+  let top = 0;
+  const composites = [];
+
+  for (const img of images) {
+    const meta = await sharp(img).metadata();
+    composites.push({
+      input: img,
+      top,
+      left: 0
+    });
+    top += meta.height;
+  }
+
+  return await sharp({
+    create: {
+      width,
+      height,
+      channels: 3,
+      background: "#ffffff"
+    }
+  })
+    .composite(composites)
+    .jpeg({ quality: 90 })
+    .toBuffer();
+}
 
 
 // ===============================
 // 🚀 MAIN HANDLER
 // ===============================
 async function handleManhwaRequest(text, from, sock) {
+  try {
+    const intent = await parseManhwaIntent(text);
 
-  const intent = await parseManhwaIntent(text);
+    if (!intent || intent.notFound) {
+      await sock.sendMessage(from, { text: "❌ Could not detect manhwa title." });
+      return;
+    }
 
-  if (!intent || intent.notFound) {
-    await sock.sendMessage(from, { text: "❌ Could not detect manhwa title." });
-    return;
-  }
+    await sock.sendMessage(from, { text: "📚 Searching manhwa..." });
 
-  await sock.sendMessage(from, { text: "📚 Searching manhwa..." });
+    const results = await searchManhwa(intent.title);
 
-  const results = await searchManhwa(intent.title);
+    if (!results.length) {
+      await sock.sendMessage(from, { text: "❌ Manhwa not found." });
+      return;
+    }
 
-  if (!results.length) {
-    await sock.sendMessage(from, { text: "❌ Manhwa not found." });
-    return;
-  }
+    const manhwa = await chooseBestManhwa(intent, results);
+    const details = await getManhwaDetails(manhwa.id);
 
-  const manhwa = await chooseBestManhwa(intent, results);
-  const details = await getManhwaDetails(manhwa.id);
+    if (!details) {
+      await sock.sendMessage(from, { text: "❌ Failed to load details." });
+      return;
+    }
 
-  if (!details) {
-    await sock.sendMessage(from, { text: "❌ Failed to load details." });
-    return;
-  }
+    // ===== Chapter Selection =====
+    let chapter;
 
-  // ===============================
-  // 📚 Chapter Selection (NEW LOGIC)
-  // ===============================
-  let chapter;
+    if (intent.chapter) {
+      chapter = details.chapters.find(
+        c => Number(c.chapter_no) === Number(intent.chapter)
+      );
+    }
 
-  if (intent.chapter) {
-    chapter = details.chapters.find(
-      c => Number(c.chapter_no) === Number(intent.chapter)
-    );
-  }
+    if (!chapter) {
+      chapter = details.chapters[0];
+    }
 
-  // fallback to latest (already sorted newest first)
-  if (!chapter) {
-    chapter = details.chapters[0];
-  }
+    if (!chapter) {
+      await sock.sendMessage(from, { text: "❌ No chapters available." });
+      return;
+    }
 
-  if (!chapter) {
-    await sock.sendMessage(from, { text: "❌ No chapters available." });
-    return;
-  }
+    await sock.sendMessage(from, { text: `📖 Loading ${chapter.name}...` });
 
-  await sock.sendMessage(from, { text: `📖 Loading ${chapter.name}...` });
+    // ===== Fetch Image URLs =====
+    const imageUrls = await getChapterImages(chapter.url);
 
-  // ===============================
-  // 🖼 FETCH IMAGES USING FULL URL
-  // ===============================
-  const images = await getChapterImages(chapter.url);
+    if (!imageUrls.length) {
+      await sock.sendMessage(from, { text: "❌ Chapter images unavailable." });
+      return;
+    }
 
-  if (!images.length) {
-    await sock.sendMessage(from, { text: "❌ Chapter images unavailable." });
-    return;
-  }
+    await sock.sendMessage(from, { text: "⬇️ Downloading pages..." });
 
-  // ===============================
-  // 📌 INFO CARD
-  // ===============================
-  const caption = `
+    // ===== Parallel Download =====
+    const imageBuffers = await downloadImagesInParallel(imageUrls);
+
+    if (!imageBuffers.length) {
+      await sock.sendMessage(from, { text: "❌ Failed to download images." });
+      return;
+    }
+
+    await sock.sendMessage(from, { text: "🧱 Building optimized pages..." });
+
+    // ===== Merge & Normalize Pages =====
+    const finalPages = await buildUniformPages(imageBuffers);
+
+    // ===== Info Card =====
+    const caption = `
 📖 *${details.title}*
 ⭐ Score: ${details.score || "N/A"}
 📌 Status: ${details.status || "Unknown"}
@@ -504,42 +595,31 @@ async function handleManhwaRequest(text, from, sock) {
 🔥 ${details.synopsis?.substring(0, 250) || "No synopsis available."}...
 `;
 
-  if (details.poster) {
-    await sock.sendMessage(from, {
-      image: { url: details.poster },
-      caption
-    });
-  } else {
-    await sock.sendMessage(from, { text: caption });
-  }
+    if (details.poster) {
+      await sock.sendMessage(from, {
+        image: { url: details.poster },
+        caption
+      });
+    } else {
+      await sock.sendMessage(from, { text: caption });
+    }
 
-  // ===============================
-  // 📄 SEND CHAPTER PAGES
-  // ===============================
-  for (let i = 0; i < images.length; i++) {
-  try {
-    const response = await axios.get(images[i], {
-      responseType: "arraybuffer",
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://manhwazone.to/"
-      }
-    });
+    // ===== Send Final Pages =====
+    for (let i = 0; i < finalPages.length; i++) {
+      await sock.sendMessage(from, {
+        image: finalPages[i],
+        caption: `📄 Page ${i + 1}/${finalPages.length}`
+      });
 
-    const buffer = Buffer.from(response.data);
+      await new Promise(res => setTimeout(res, 300));
+    }
 
-    await sock.sendMessage(from, {
-      image: buffer,
-      caption: `📄 Page ${i + 1}/${images.length}`
-    });
-
-    await new Promise(res => setTimeout(res, 250));
+    await sock.sendMessage(from, { text: "✅ End of chapter." });
 
   } catch (err) {
-    logError("IMAGE STREAM FAIL", images[i]);
+    logError("MAIN MANHWA HANDLER", err);
+    await sock.sendMessage(from, { text: "❌ Unexpected error occurred." });
   }
-}
-  await sock.sendMessage(from, { text: "✅ End of chapter." });
 }
 async function detectMessageType(text) {
   try {
@@ -973,6 +1053,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
