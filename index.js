@@ -460,12 +460,22 @@ async function buildUniformPages(buffers, targetWidth = 1200, pageHeight = 2000)
   let currentHeight = 0;
 
   for (const buffer of buffers) {
+
     const resized = await sharp(buffer)
-      .resize({ width: targetWidth })
+      .rotate() // fixes EXIF rotation issues
+      .resize(targetWidth, null, {
+        fit: "inside",
+        withoutEnlargement: true
+      })
       .jpeg({ quality: 85 })
       .toBuffer();
 
     const meta = await sharp(resized).metadata();
+
+    // Safety clamp (never exceed width)
+    if (meta.width > targetWidth) {
+      continue;
+    }
 
     if (currentHeight + meta.height > pageHeight && currentImages.length) {
       pages.push(await mergePage(currentImages, targetWidth, pageHeight));
@@ -489,11 +499,18 @@ async function mergePage(images, width, height) {
 
   for (const img of images) {
     const meta = await sharp(img).metadata();
+
+    // Final safety resize (guaranteed fit)
+    const safeImg = await sharp(img)
+      .resize(width, meta.height, { fit: "contain" })
+      .toBuffer();
+
     composites.push({
-      input: img,
+      input: safeImg,
       top,
       left: 0
     });
+
     top += meta.height;
   }
 
@@ -509,7 +526,6 @@ async function mergePage(images, width, height) {
     .jpeg({ quality: 90 })
     .toBuffer();
 }
-
 
 // ===============================
 // 🚀 MAIN HANDLER
@@ -1053,6 +1069,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
