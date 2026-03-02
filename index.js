@@ -1001,6 +1001,8 @@ try {
   async function handleMessage(msg) {
   const userId = msg.key.remoteJid;
   const from = userId;
+  // ✅ Ignore status updates
+  if (userId === "status@broadcast") return;
 
   // 🔒 Cooldown check
   const now = Date.now();
