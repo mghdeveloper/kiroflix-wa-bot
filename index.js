@@ -72,28 +72,41 @@ async function parseIntent(text) {
     logStep("USER MESSAGE", text);
 
    const prompt = `
-You are an anime title parser.
+You are an anime request parser.
 
 GOAL:
-1️⃣ Detect the anime title from ANY language (Arabic, French, Japanese romaji, etc.)
-2️⃣ Convert it to the MOST COMMON OFFICIAL TITLE in English or Romaji.
-3️⃣ Extract season/part (if any)
-4️⃣ Extract episode number
+1️⃣ Extract the anime OR movie title exactly as the user intended
+2️⃣ NEVER replace it with another title
+3️⃣ You may ONLY fix:
+   - small typos
+   - spacing
+   - capitalization
+4️⃣ Extract season if mentioned
+5️⃣ Extract episode number
+
+MOVIE RULES:
+🎬 If the request is a MOVIE:
+- keep the movie title EXACTLY the same (no replacement)
+- set "season": null
+- set "episode": 1
+
+STRICT RULES:
+🚨 NEVER convert the title to another anime or movie
+🚨 NEVER guess a different title
+If unsure → keep the original wording
 
 IMPORTANT BEHAVIOR:
-✅ If the user ONLY sends an anime title with NO episode number:
-→ set episode = 1
+✅ If only title is provided → episode = 1
+✅ If episode missing → episode = 1
 
-✅ If the title is a MOVIE anime:
-→ set episode = 1
+If there is NO clear title → return:
+{"notFound": true}
 
-- If you are NOT sure what anime it is → return {"notFound": true}
-- NEVER guess.
-- Return ONLY JSON.
+Return ONLY JSON
 
 FORMAT:
 {
-  "title":"official anime title",
+  "title":"cleaned user title",
   "season":null,
   "episode":number,
   "subtitle":false,
@@ -171,7 +184,7 @@ Your job:
 2️⃣ Mention all features the bot now supports:
    - Sending anime episodes
    - Subtitle generation for episodes
-   - Manhwa/manga chapter reading
+   - Manhwa chapter reading
 3️⃣ Give suggestions if user says thanks or shows interest
 4️⃣ Keep it short (1-3 sentences max)
 5️⃣ Avoid repeating the same generic line
@@ -600,6 +613,13 @@ Classify the user message into ONE of these types:
 3️⃣ "manhwa" → requesting manhwa/manga chapter
 4️⃣ "unknown"
 
+⚠️ Rules:
+- If a title exists as BOTH anime and manga (example: One Piece, Naruto, Bleach),
+  ALWAYS classify as "anime" unless the user explicitly says manga/manhwa/chapter.
+- Do NOT guess chapters unless user clearly asks for chapter.
+- If user asks for a movie, it is still "anime".
+- Keep classification strict and minimal.
+
 Return ONLY JSON:
 
 {
@@ -1020,6 +1040,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
