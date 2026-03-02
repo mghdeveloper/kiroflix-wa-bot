@@ -16,7 +16,8 @@ const PORT = process.env.PORT || 3000;
 const pLimit = require("p-limit");
 const downloadLimit = pLimit(5);
 let qrCodeDataURL = null; // store latest QR code
-
+// Maximum message length allowed for processing
+const MAX_MESSAGE_LENGTH = 300; // or whatever limit you prefer
 app.get("/", async (_, res) => {
   // If bot is logged in, just show a message
   if (!qrCodeDataURL) {
@@ -1152,4 +1153,22 @@ if (text.length > MAX_MESSAGE_LENGTH) {
 }
 
 startBot();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
