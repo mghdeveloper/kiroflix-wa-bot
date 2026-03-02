@@ -450,33 +450,30 @@ async function getChapterImages(chapterUrl) {
 }
 
 // ===============================
-// 📥 DOWNLOAD IMAGES DIRECTLY VIA PROXY WITH PROGRESS
+// 📥 DOWNLOAD IMAGES VIA PROXY WITH PARALLEL + PROGRESS
 // ===============================
-async function downloadImagesWithProgress(images, sock, from) {
+async function downloadImagesProxy(images, sock, from) {
   const buffers = [];
-  for (let i = 0; i < images.length; i++) {
-    let buffer = null;
-    const url = images[i];
+  let progressMsg = await sock.sendMessage(from, { text: `⬇️ Downloading pages... 0/${images.length}` });
 
-    try {
-      const res = await axios.get(url, { responseType: "arraybuffer", timeout: 20000 });
-      buffer = Buffer.from(res.data);
-    } catch (err) {
+  const concurrency = 20; // parallel downloads
+  for (let i = 0; i < images.length; i += concurrency) {
+    const batch = images.slice(i, i + concurrency);
+    const results = await Promise.all(batch.map(async url => {
       try {
         const proxyUrl = `https://image-fetcher-1.onrender.com/fetch?url=${encodeURIComponent(url)}`;
-        const proxyRes = await axios.get(proxyUrl, { responseType: "arraybuffer", timeout: 20000 });
-        buffer = Buffer.from(proxyRes.data);
-      } catch (proxyErr) {
-        logResponse("IMAGE_DOWNLOAD_FAIL", url);
+        const res = await axios.get(proxyUrl, { responseType: "arraybuffer", timeout: 20000 });
+        return Buffer.from(res.data);
+      } catch {
+        logResponse("IMAGE_DOWNLOAD_FAIL_PROXY", url);
+        return null;
       }
-    }
+    }));
 
-    if (buffer) buffers.push(buffer);
+    for (const buf of results) if (buf) buffers.push(buf);
 
-    // Progress every 2 images
-    if (i % 2 === 0 || i === images.length - 1) {
-      await sock.sendMessage(from, { text: `⬇️ Downloading pages... ${i + 1}/${images.length}` });
-    }
+    // Update progress message
+    await sock.editMessage(progressMsg.key, { text: `⬇️ Downloading pages... ${buffers.length}/${images.length}` });
   }
 
   return buffers;
@@ -487,7 +484,6 @@ async function downloadImagesWithProgress(images, sock, from) {
 // ===============================
 async function normalizeAndSplitImages(buffers, targetWidth = 1200, maxHeight = 2000) {
   const finalPages = [];
-
   for (const buffer of buffers) {
     const img = await sharp(buffer).rotate().resize(targetWidth, null, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
     const metadata = await sharp(img).metadata();
@@ -504,19 +500,19 @@ async function normalizeAndSplitImages(buffers, targetWidth = 1200, maxHeight = 
       }
     }
   }
-
   return finalPages;
 }
 
 // ===============================
-// 📄 CREATE READER-FRIENDLY PDF
+// 📄 CREATE PDF READER-FRIENDLY
 // ===============================
 async function imagesToPDF(images, sock, from) {
   const doc = new PDFDocument({ autoFirstPage: false });
   const chunks = [];
-
   doc.on("data", chunk => chunks.push(chunk));
   const endPromise = new Promise(resolve => doc.on("end", () => resolve(Buffer.concat(chunks))));
+
+  let progressMsg = await sock.sendMessage(from, { text: `📄 Generating PDF... 0/${images.length}` });
 
   for (let i = 0; i < images.length; i++) {
     const img = images[i];
@@ -525,7 +521,7 @@ async function imagesToPDF(images, sock, from) {
     doc.image(img, 0, 0, { width: metadata.width, height: metadata.height });
 
     if (i % 2 === 0 || i === images.length - 1) {
-      await sock.sendMessage(from, { text: `📄 Generating PDF... ${i + 1}/${images.length}` });
+      await sock.editMessage(progressMsg.key, { text: `📄 Generating PDF... ${i + 1}/${images.length}` });
     }
   }
 
@@ -541,23 +537,23 @@ async function handleManhwaRequest(text, from, sock) {
     const intent = await parseManhwaIntent(text);
     if (!intent || intent.notFound) return await sock.sendMessage(from, { text: "❌ Could not detect manhwa title." });
 
-    await sock.sendMessage(from, { text: "📚 Searching manhwa..." });
+    const searchMsg = await sock.sendMessage(from, { text: "📚 Searching manhwa..." });
     const results = await searchManhwa(intent.title);
-    if (!results.length) return await sock.sendMessage(from, { text: "❌ Manhwa not found." });
+    if (!results.length) return await sock.editMessage(searchMsg.key, { text: "❌ Manhwa not found." });
 
     const manhwa = await chooseBestManhwa(intent, results);
     const details = await getManhwaDetails(manhwa.id);
-    if (!details) return await sock.sendMessage(from, { text: "❌ Failed to load details." });
+    if (!details) return await sock.editMessage(searchMsg.key, { text: "❌ Failed to load details." });
 
     let chapter = details.chapters.find(c => c.chapter_no === intent.chapter) || details.chapters[0];
-    if (!chapter) return await sock.sendMessage(from, { text: "❌ No chapters available." });
+    if (!chapter) return await sock.editMessage(searchMsg.key, { text: "❌ No chapters available." });
 
-    await sock.sendMessage(from, { text: `📖 Loading ${chapter.name}...` });
+    await sock.editMessage(searchMsg.key, { text: `📖 Loading ${chapter.name}...` });
     const imageUrls = await getChapterImages(chapter.url);
-    if (!imageUrls.length) return await sock.sendMessage(from, { text: "❌ Chapter images unavailable." });
+    if (!imageUrls.length) return await sock.editMessage(searchMsg.key, { text: "❌ Chapter images unavailable." });
 
-    const imageBuffers = await downloadImagesWithProgress(imageUrls, sock, from);
-    if (!imageBuffers.length) return await sock.sendMessage(from, { text: "❌ Failed to download images." });
+    const imageBuffers = await downloadImagesProxy(imageUrls, sock, from);
+    if (!imageBuffers.length) return await sock.editMessage(searchMsg.key, { text: "❌ Failed to download images." });
 
     const finalPages = await normalizeAndSplitImages(imageBuffers);
 
@@ -580,8 +576,7 @@ async function handleManhwaRequest(text, from, sock) {
       caption
     });
 
-    await sock.sendMessage(from, { text: "✅ Chapter ready for reading." });
-
+    await sock.editMessage(searchMsg.key, { text: "✅ Chapter ready for reading." });
   } catch (err) {
     logResponse("MAIN_HANDLER_ERROR", { error: err.message });
     await sock.sendMessage(from, { text: "❌ Unexpected error occurred." });
@@ -1019,6 +1014,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
