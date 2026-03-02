@@ -454,9 +454,11 @@ async function getChapterImages(chapterUrl) {
 // ===============================
 async function downloadImagesProxy(images, sock, from) {
   const buffers = [];
-  let progressMsg = await sock.sendMessage(from, { text: `⬇️ Downloading pages... 0/${images.length}` });
+  // Send initial progress message
+  const progressMsg = await sock.sendMessage(from, { text: `⬇️ Downloading pages... 0/${images.length}` });
+  const progressKey = progressMsg.key;
 
-  const concurrency = 20; // parallel downloads
+  const concurrency = 8; // parallel downloads
   for (let i = 0; i < images.length; i += concurrency) {
     const batch = images.slice(i, i + concurrency);
     const results = await Promise.all(batch.map(async url => {
@@ -472,8 +474,8 @@ async function downloadImagesProxy(images, sock, from) {
 
     for (const buf of results) if (buf) buffers.push(buf);
 
-    // Update progress message
-    await sock.editMessage(progressMsg.key, { text: `⬇️ Downloading pages... ${buffers.length}/${images.length}` });
+    // Update progress message using edit
+    await sock.sendMessage(from, { text: `⬇️ Downloading pages... ${buffers.length}/${images.length}`, edit: progressKey });
   }
 
   return buffers;
@@ -512,7 +514,8 @@ async function imagesToPDF(images, sock, from) {
   doc.on("data", chunk => chunks.push(chunk));
   const endPromise = new Promise(resolve => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-  let progressMsg = await sock.sendMessage(from, { text: `📄 Generating PDF... 0/${images.length}` });
+  const progressMsg = await sock.sendMessage(from, { text: `📄 Generating PDF... 0/${images.length}` });
+  const progressKey = progressMsg.key;
 
   for (let i = 0; i < images.length; i++) {
     const img = images[i];
@@ -521,7 +524,7 @@ async function imagesToPDF(images, sock, from) {
     doc.image(img, 0, 0, { width: metadata.width, height: metadata.height });
 
     if (i % 2 === 0 || i === images.length - 1) {
-      await sock.editMessage(progressMsg.key, { text: `📄 Generating PDF... ${i + 1}/${images.length}` });
+      await sock.sendMessage(from, { text: `📄 Generating PDF... ${i + 1}/${images.length}`, edit: progressKey });
     }
   }
 
@@ -538,22 +541,25 @@ async function handleManhwaRequest(text, from, sock) {
     if (!intent || intent.notFound) return await sock.sendMessage(from, { text: "❌ Could not detect manhwa title." });
 
     const searchMsg = await sock.sendMessage(from, { text: "📚 Searching manhwa..." });
+    const searchKey = searchMsg.key;
+
     const results = await searchManhwa(intent.title);
-    if (!results.length) return await sock.editMessage(searchMsg.key, { text: "❌ Manhwa not found." });
+    if (!results.length) return await sock.sendMessage(from, { text: "❌ Manhwa not found.", edit: searchKey });
 
     const manhwa = await chooseBestManhwa(intent, results);
     const details = await getManhwaDetails(manhwa.id);
-    if (!details) return await sock.editMessage(searchMsg.key, { text: "❌ Failed to load details." });
+    if (!details) return await sock.sendMessage(from, { text: "❌ Failed to load details.", edit: searchKey });
 
     let chapter = details.chapters.find(c => c.chapter_no === intent.chapter) || details.chapters[0];
-    if (!chapter) return await sock.editMessage(searchMsg.key, { text: "❌ No chapters available." });
+    if (!chapter) return await sock.sendMessage(from, { text: "❌ No chapters available.", edit: searchKey });
 
-    await sock.editMessage(searchMsg.key, { text: `📖 Loading ${chapter.name}...` });
+    await sock.sendMessage(from, { text: `📖 Loading ${chapter.name}...`, edit: searchKey });
+
     const imageUrls = await getChapterImages(chapter.url);
-    if (!imageUrls.length) return await sock.editMessage(searchMsg.key, { text: "❌ Chapter images unavailable." });
+    if (!imageUrls.length) return await sock.sendMessage(from, { text: "❌ Chapter images unavailable.", edit: searchKey });
 
     const imageBuffers = await downloadImagesProxy(imageUrls, sock, from);
-    if (!imageBuffers.length) return await sock.editMessage(searchMsg.key, { text: "❌ Failed to download images." });
+    if (!imageBuffers.length) return await sock.sendMessage(from, { text: "❌ Failed to download images.", edit: searchKey });
 
     const finalPages = await normalizeAndSplitImages(imageBuffers);
 
@@ -576,7 +582,7 @@ async function handleManhwaRequest(text, from, sock) {
       caption
     });
 
-    await sock.editMessage(searchMsg.key, { text: "✅ Chapter ready for reading." });
+    await sock.sendMessage(from, { text: "✅ Chapter ready for reading.", edit: searchKey });
   } catch (err) {
     logResponse("MAIN_HANDLER_ERROR", { error: err.message });
     await sock.sendMessage(from, { text: "❌ Unexpected error occurred." });
@@ -1014,6 +1020,7 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 }
 
 startBot();
+
 
 
 
