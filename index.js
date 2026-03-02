@@ -1021,13 +1021,7 @@ if (!userData || userData.date !== today) {
   }
   userData.count++;
 }
-  // 🔐 Lock check
-  if (userLocks.get(userId)) {
-    console.log(`[LOCK] Skipping message from ${userId}`);
-    return;
-  }
-
-  userLocks.set(userId, true);
+  
 
   if (userLocks.get(userId)) {
     console.log(`[LOCK] Skipping message from ${userId}`);
