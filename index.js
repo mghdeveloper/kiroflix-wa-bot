@@ -74,6 +74,12 @@ async function buildContext(userJid, currentText) {
     }
 
     context += `User: ${currentText}\nAI:`;
+
+    // ✅ LOG THE SIDE CONTEXT
+    console.log("===== SIDE CONTEXT =====");
+    console.log(context);
+    console.log("========================");
+
     return context;
 
   } catch (err) {
@@ -969,12 +975,15 @@ Here is the latest available 👇
 }
   async function handleGeneralRequest(text, from, thinkingKey) {
   try {
-    const reply = await generalReply(text);
+    const replyRaw = await generalReply(text);
+let reply = replyRaw;
 
-    await sock.sendMessage(from, {
-      text: reply,
-      edit: thinkingKey
-    });
+try {
+  const parsed = JSON.parse(replyRaw);
+  if (parsed?.message) reply = parsed.message;
+} catch {}
+
+    await sock.sendMessage(from, { text: reply, edit: thinkingKey });
 
     await logWAUsage({
       userJid: from,
