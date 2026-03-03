@@ -87,6 +87,34 @@ async function buildContext(userJid, currentText) {
     return `User: ${currentText}\nAI:`;
   }
 }
+async function searchReference(query) {
+  try {
+    const { data } = await axios.get(
+      "https://duckduckgotool.onrender.com/search",
+      {
+        params: {
+          q: query,
+          max_results: 5
+        },
+        timeout: 10000
+      }
+    );
+
+    if (!data?.results?.length) return "";
+
+    // Keep only useful text
+    const simplified = data.results.map(r => ({
+      title: r.title,
+      description: r.description
+    }));
+
+    return JSON.stringify(simplified, null, 2);
+
+  } catch (err) {
+    console.error("❌ DuckDuckGo search failed:", err.message);
+    return "";
+  }
+}
 // -------------------- AI --------------------
 async function askAI(prompt) {
   try {
@@ -135,42 +163,49 @@ async function parseIntent(text) {
   try {
     logStep("USER MESSAGE", text);
 
+    // 🔎 Fetch external search reference
+    const searchData = await searchReference(text);
+
    const prompt = `
 You are an anime request parser.
 
+You are given:
+1️⃣ User message
+2️⃣ Real search engine results (reference context)
+
+Use the search results ONLY to:
+- confirm correct anime title spelling
+- detect correct season if mentioned
+- detect if it is a movie
+
+🚨 NEVER invent a different anime
+🚨 NEVER replace with unrelated title
+🚨 ONLY normalize to officially correct title if confirmed by search results
+
+--------------------------------
+SEARCH RESULTS:
+${searchData}
+--------------------------------
+
 GOAL:
-1️⃣ Extract the anime OR movie title exactly as the user intended
-2️⃣ NEVER replace it with another title
-3️⃣ You may ONLY fix:
-   - small typos
-   - spacing
-   - capitalization
-4️⃣ Extract season if mentioned
-5️⃣ Extract episode number
+1️⃣ Extract the anime OR movie title exactly as user intended
+2️⃣ Fix small typos only if confirmed by search
+3️⃣ Extract season if mentioned
+4️⃣ Extract episode number
 
-MOVIE RULES:
-🎬 If the request is a MOVIE:
-- keep the movie title EXACTLY the same (no replacement)
-- set "season": null
-- set "episode": 1
+MOVIE RULE:
+If movie:
+- season = null
+- episode = 1
 
-STRICT RULES:
-🚨 NEVER convert the title to another anime or movie
-🚨 NEVER guess a different title
-If unsure → keep the original wording
+If no episode → episode = 1
 
-IMPORTANT BEHAVIOR:
-✅ If only title is provided → episode = 1
-✅ If episode missing → episode = 1
+If unclear → {"notFound": true}
 
-If there is NO clear title → return:
-{"notFound": true}
+Return ONLY JSON:
 
-Return ONLY JSON
-
-FORMAT:
 {
-  "title":"cleaned user title",
+  "title":"cleaned official title",
   "season":null,
   "episode":number,
   "subtitle":false,
@@ -390,21 +425,31 @@ function logResponse(tag, data) {
 // 🔹 MANHWA INTENT PARSER
 // ===============================
 async function parseManhwaIntent(text) {
+  const searchData = await searchReference(text);
   try {
     const prompt = `
 You are a manhwa title parser.
 
+You are given real search engine results.
+
+Use them ONLY to:
+- confirm official English title
+- correct typos
+- detect correct chapter number
+
+--------------------------------
+SEARCH RESULTS:
+${searchData}
+--------------------------------
+
 GOAL:
-1️⃣ Detect the manhwa title (any language)
-2️⃣ Convert to official common English title
-3️⃣ Extract chapter number
+1️⃣ Convert title to official English name if confirmed
+2️⃣ Extract chapter number
+3️⃣ If chapter missing → 1
+4️⃣ If unclear → {"notFound": true}
 
-RULES:
-- If chapter not provided → set chapter = 1
-- If not sure → return {"notFound": true}
-- Return ONLY JSON
+Return ONLY JSON:
 
-FORMAT:
 {
   "title": "official manhwa title",
   "chapter": number,
@@ -413,7 +458,6 @@ FORMAT:
 
 User: ${text}
 `;
-
     let res = await askAI(prompt);
     logResponse("AI_INTENT_RAW", res);
 
@@ -1157,6 +1201,7 @@ if (text.length > MAX_MESSAGE_LENGTH) {
 }
 
 startBot();
+
 
 
 
