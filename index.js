@@ -575,31 +575,44 @@ async function getChapterImages(chapterUrl) {
 // ===============================
 async function downloadImagesProxy(images, sock, from, thinkingKey) {
   const buffers = [];
-  // Send initial progress message
-  await sock.sendMessage(from, {
-  text: `⬇️ Downloading pages... ${buffers.length}/${images.length}`,
-  edit: thinkingKey
-});
-  const progressKey = progressMsg.key;
 
-  const concurrency = 8; // parallel downloads
+  await sock.sendMessage(from, {
+    text: `⬇️ Downloading pages... 0/${images.length}`,
+    edit: thinkingKey
+  });
+
+  const concurrency = 8;
+
   for (let i = 0; i < images.length; i += concurrency) {
     const batch = images.slice(i, i + concurrency);
-    const results = await Promise.all(batch.map(async url => {
-      try {
-        const proxyUrl = `https://image-fetcher-1.onrender.com/fetch?url=${encodeURIComponent(url)}`;
-        const res = await axios.get(proxyUrl, { responseType: "arraybuffer", timeout: 20000 });
-        return Buffer.from(res.data);
-      } catch {
-        logResponse("IMAGE_DOWNLOAD_FAIL_PROXY", url);
-        return null;
-      }
-    }));
 
-    for (const buf of results) if (buf) buffers.push(buf);
+    const results = await Promise.all(
+      batch.map(async url => {
+        try {
+          const proxyUrl =
+            `https://image-fetcher-1.onrender.com/fetch?url=${encodeURIComponent(url)}`;
 
-    // Update progress message using edit
-    await sock.sendMessage(from, { text: `⬇️ Downloading pages... ${buffers.length}/${images.length}`, edit: progressKey });
+          const res = await axios.get(proxyUrl, {
+            responseType: "arraybuffer",
+            timeout: 20000
+          });
+
+          return Buffer.from(res.data);
+        } catch {
+          logResponse("IMAGE_DOWNLOAD_FAIL_PROXY", url);
+          return null;
+        }
+      })
+    );
+
+    for (const buf of results) {
+      if (buf) buffers.push(buf);
+    }
+
+    await sock.sendMessage(from, {
+      text: `⬇️ Downloading pages... ${buffers.length}/${images.length}`,
+      edit: thinkingKey
+    });
   }
 
   return buffers;
@@ -635,30 +648,33 @@ async function normalizeAndSplitImages(buffers, targetWidth = 1200, maxHeight = 
 async function imagesToPDF(images, sock, from, thinkingKey) {
   const doc = new PDFDocument({ autoFirstPage: false });
   const chunks = [];
-  doc.on("data", chunk => chunks.push(chunk));
-  const endPromise = new Promise(resolve => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-  const progressMsg = await sock.sendMessage(from, {
-  text: `📄 Generating PDF... ${i + 1}/${images.length}`,
-  edit: thinkingKey
-});
-  const progressKey = progressMsg.key;
+  doc.on("data", chunk => chunks.push(chunk));
+  const endPromise = new Promise(resolve =>
+    doc.on("end", () => resolve(Buffer.concat(chunks)))
+  );
 
   for (let i = 0; i < images.length; i++) {
     const img = images[i];
     const metadata = await sharp(img).metadata();
+
     doc.addPage({ size: [metadata.width, metadata.height] });
-    doc.image(img, 0, 0, { width: metadata.width, height: metadata.height });
+    doc.image(img, 0, 0, {
+      width: metadata.width,
+      height: metadata.height
+    });
 
     if (i % 2 === 0 || i === images.length - 1) {
-      await sock.sendMessage(from, { text: `📄 Generating PDF... ${i + 1}/${images.length}`, edit: progressKey });
+      await sock.sendMessage(from, {
+        text: `📄 Generating PDF... ${i + 1}/${images.length}`,
+        edit: thinkingKey
+      });
     }
   }
 
   doc.end();
   return endPromise;
 }
-
 // ===============================
 // 🚀 MAIN HANDLER
 // ===============================
@@ -691,12 +707,12 @@ async function handleManhwaRequest(text, from, sock, thinkingKey) {
     const imageUrls = await getChapterImages(chapter.url);
     if (!imageUrls.length) return await sock.sendMessage(from, { text: "❌ Chapter images unavailable.", edit: searchKey });
 
-    const imageBuffers = await  downloadImagesProxy(images, sock, from, thinkingKey)
+    const imageBuffers = await downloadImagesProxy(images, sock, from, thinkingKey)
     if (!imageBuffers.length) return await sock.sendMessage(from, { text: "❌ Failed to download images.", edit: searchKey });
 
     const finalPages = await normalizeAndSplitImages(imageBuffers);
 
-    const pdfBuffer = await imagesToPDF(images, sock, from, thinkingKey)
+    const pdfBuffer = await imagesToPDF(finalPages, sock, from, thinkingKey);
 
     const caption = `
 📖 *${details.title}*
