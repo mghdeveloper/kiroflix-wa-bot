@@ -1043,6 +1043,7 @@ try {
   }
 }
   async function handleMessage(msg) {
+    const quotedMsg = msg.quoted || msg;
   const userId = msg.key.remoteJid;
   const from = userId;
   // ✅ Ignore status updates
@@ -1096,8 +1097,8 @@ if (!userData || userData.date !== today) {
 
     // 🧠 Send thinking message
     const thinkingMsg = await sock.sendMessage(from, {
-      text: "🤔 Thinking..."
-    });
+  text: "🤔 Thinking..."
+}, { quoted: quotedMsg });
 
     const thinkingKey = thinkingMsg.key;
 
@@ -1172,12 +1173,31 @@ sock.ev.on("messages.upsert", async ({ messages, type }) => {
 
 text = text.trim();
 
-// 🔒 Length protection
-if (text.length > MAX_MESSAGE_LENGTH) {
-  await sock.sendMessage(from, {
-    text: "⚠️ Message too long.\nPlease send a shorter request (max 300 characters).\n\nExample:\nNaruto episode 5\nSolo Leveling chapter 120"
-  });
-  return;
+// ✅ GROUP LOGIC
+if (isGroup) {
+
+  // Only respond to /stream commands in groups
+  if (!text.toLowerCase().startsWith("/stream")) return;
+
+  // Remove "/stream"
+  text = text.replace(/^\/stream/i, "").trim();
+
+  // 🔒 Length check ONLY for command usage in groups
+  if (text.length > MAX_MESSAGE_LENGTH) {
+    await sock.sendMessage(from, {
+      text: "⚠️ Request too long.\nExample:\n/stream Naruto episode 5"
+    });
+    return;
+  }
+
+} else {
+  // 🔒 Private chat → always check length
+  if (text.length > MAX_MESSAGE_LENGTH) {
+    await sock.sendMessage(from, {
+      text: "⚠️ Message too long.\nPlease send a shorter request (max 300 characters).\n\nExample:\nNaruto episode 5\nSolo Leveling chapter 120"
+    });
+    return;
+  }
 }
 
   // ✅ GROUP LOGIC
@@ -1193,10 +1213,11 @@ if (text.length > MAX_MESSAGE_LENGTH) {
   // In private, allow everything (no command needed)
 
   await handleMessage({
-    ...msg,
-    key: { ...msg.key, remoteJid: from },
-    message: { conversation: text }
-  });
+  ...msg,
+  key: { ...msg.key, remoteJid: from },
+  message: { conversation: text },
+  quoted: msg // 👈 attach original message
+});
 });
 }
 
