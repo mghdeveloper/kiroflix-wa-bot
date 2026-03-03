@@ -36,6 +36,7 @@ app.get("/", async (_, res) => {
 
 app.listen(PORT, () => console.log("[SERVER] Running on", PORT));
 // Track users that are currently being processed
+const userLocks = new Map();
 
 // 🔒 Anti-spam cooldown
 const lastMessageTime = new Map();
@@ -43,24 +44,6 @@ const MESSAGE_COOLDOWN = 2000; // 2 seconds
 // 📊 Daily usage limit
 const dailyUsage = new Map();
 const DAILY_LIMIT = 50; // per user per day
-// ===============================
-// 🚀 GLOBAL PRODUCTION QUEUE
-// ===============================
-
-// Maximum parallel workers
-const MAX_PARALLEL = 30;
-
-// Global concurrency limiter
-const globalLimit = pLimit(MAX_PARALLEL);
-
-// Track users currently running a job
-const activeUsers = new Set();
-
-// Prevent same user running in multiple chats
-const userActiveChat = new Map();
-
-// Queue per chat (group or private)
-const chatQueues = new Map();
 // // -------------------- CONFIG --------------------
 const GEMINI_KEY = process.env.GEMINI_KEY;
 const GEMINI_URL =
@@ -76,7 +59,6 @@ function logError(context, err) {
   console.error(`\n❌ ERROR in ${context}`);
   console.error(err.message);
 }
-
 async function buildContext(userJid, currentText) {
   try {
     const { data } = await axios.post(
@@ -1125,47 +1107,14 @@ if (!userData || userData.date !== today) {
   }
   userData.count++;
 }
-  async function processChatQueue(chatId) {
-
-  const queue = chatQueues.get(chatId);
-  if (!queue || queue.processing) return;
-
-  queue.processing = true;
-
-  const runNext = async () => {
-
-    if (queue.messages.length === 0) {
-      queue.processing = false;
-      return;
-    }
-
-    const job = queue.messages.shift();
-
-    await globalLimit(async () => {
-
-      try {
-        await handleMessage(job.msg);
-
-      } catch (err) {
-        console.error("Queue job error:", err);
-
-      } finally {
-
-        activeUsers.delete(job.sender);
-        userActiveChat.delete(job.sender);
-
-        // process next message
-        runNext();
-      }
-
-    });
-
-  };
-
-  runNext();
-}
-
   
+
+  if (userLocks.get(userId)) {
+    console.log(`[LOCK] Skipping message from ${userId}`);
+    return;
+  }
+
+  userLocks.set(userId, true);
 
   try {
     const from = userId;
@@ -1224,7 +1173,9 @@ await handleGeneralRequest(resolvedText, from, thinkingKey);
   await sock.sendMessage(msg.key.remoteJid, {
     text: "⚠️ Something went wrong"
   }, { quoted: quotedMsg });
-} 
+} finally {
+  userLocks.delete(userId);
+}
 }
   sock.ev.on("creds.update", saveCreds);
 
@@ -1285,61 +1236,12 @@ if (isGroup) {
   // ✅ PRIVATE CHAT
   // In private, allow everything (no command needed)
 
-  const sender = msg.key.participant || msg.key.remoteJid;
-
-// ❌ User already running a request
-if (activeUsers.has(sender)) {
-
-  await sock.sendMessage(from, {
-    text: "⏳ I'm still processing your previous request. Please wait 😊"
-  });
-
-  return;
-}
-
-// ❌ User active in another chat
-const activeChat = userActiveChat.get(sender);
-
-if (activeChat && activeChat !== from) {
-
-  await sock.sendMessage(from, {
-    text: "⚠️ Please wait until your current request finishes before sending another."
-  });
-
-  return;
-}
-
-// Register active user
-activeUsers.add(sender);
-userActiveChat.set(sender, from);
-
-// Create queue if not exists
-if (!chatQueues.has(from)) {
-  chatQueues.set(from, { messages: [], processing: false });
-}
-
-// Add message to queue
-chatQueues.get(from).messages.push({
-  msg: {
-    ...msg,
-    key: { ...msg.key, remoteJid: from },
-    message: { conversation: text },
-    quoted: msg
-  },
-  sender
+  await handleMessage({
+  ...msg,
+  key: { ...msg.key, remoteJid: from },
+  message: { conversation: text },
+  quoted: msg // 👈 attach original message
 });
-
-// OPTIONAL: queue position message
-const position = chatQueues.get(from).messages.length;
-
-if (position > 1) {
-  await sock.sendMessage(from, {
-    text: `⏳ Your request is queued (#${position})`
-  });
-}
-
-// Start processing
-processChatQueue(from);
 });
 }
 
