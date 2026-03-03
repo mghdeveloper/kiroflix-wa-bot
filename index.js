@@ -1141,7 +1141,7 @@ await handleGeneralRequest(resolvedText, from, thinkingKey);
   logError("MAIN HANDLER", err);
   await sock.sendMessage(msg.key.remoteJid, {
     text: "⚠️ Something went wrong"
-  });
+  }, { quoted: quotedMsg });
 } finally {
   userLocks.delete(userId);
 }
@@ -1149,7 +1149,7 @@ await handleGeneralRequest(resolvedText, from, thinkingKey);
   sock.ev.on("creds.update", saveCreds);
 
   // 📩 MAIN MESSAGE HANDLER
-const COMMANDS = ["/stream"]; // commands you want to detect
+const COMMANDS = ["/kiroflix"]; // commands you want to detect
 
 sock.ev.on("messages.upsert", async ({ messages, type }) => {
   if (type !== "notify") return; // ✅ ignore duplicates
@@ -1177,15 +1177,15 @@ text = text.trim();
 if (isGroup) {
 
   // Only respond to /stream commands in groups
-  if (!text.toLowerCase().startsWith("/stream")) return;
+  if (!text.toLowerCase().startsWith("/kiroflix")) return;
 
-  // Remove "/stream"
-  text = text.replace(/^\/stream/i, "").trim();
+  // Remove "/kiroflix"
+  text = text.replace(/^\/kiroflix/i, "").trim();
 
   // 🔒 Length check ONLY for command usage in groups
   if (text.length > MAX_MESSAGE_LENGTH) {
     await sock.sendMessage(from, {
-      text: "⚠️ Request too long.\nExample:\n/stream Naruto episode 5"
+      text: "⚠️ Request too long.\nExample:\n/kiroflix Naruto episode 5"
     });
     return;
   }
@@ -1200,14 +1200,7 @@ if (isGroup) {
   }
 }
 
-  // ✅ GROUP LOGIC
-  if (isGroup) {
-    // Only respond to /stream commands in groups
-    if (!text.toLowerCase().startsWith("/stream")) return;
-
-    // Remove "/stream" from text before sending to handler
-    text = text.replace(/^\/stream/i, "").trim();
-  }
+  
 
   // ✅ PRIVATE CHAT
   // In private, allow everything (no command needed)
