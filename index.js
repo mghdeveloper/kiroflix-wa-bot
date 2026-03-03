@@ -76,45 +76,7 @@ function logError(context, err) {
   console.error(`\n❌ ERROR in ${context}`);
   console.error(err.message);
 }
-async function processChatQueue(chatId) {
 
-  const queue = chatQueues.get(chatId);
-  if (!queue || queue.processing) return;
-
-  queue.processing = true;
-
-  const runNext = async () => {
-
-    if (queue.messages.length === 0) {
-      queue.processing = false;
-      return;
-    }
-
-    const job = queue.messages.shift();
-
-    await globalLimit(async () => {
-
-      try {
-        await handleMessage(job.msg);
-
-      } catch (err) {
-        console.error("Queue job error:", err);
-
-      } finally {
-
-        activeUsers.delete(job.sender);
-        userActiveChat.delete(job.sender);
-
-        // process next message
-        runNext();
-      }
-
-    });
-
-  };
-
-  runNext();
-}
 async function buildContext(userJid, currentText) {
   try {
     const { data } = await axios.post(
@@ -1163,7 +1125,45 @@ if (!userData || userData.date !== today) {
   }
   userData.count++;
 }
-  
+  async function processChatQueue(chatId) {
+
+  const queue = chatQueues.get(chatId);
+  if (!queue || queue.processing) return;
+
+  queue.processing = true;
+
+  const runNext = async () => {
+
+    if (queue.messages.length === 0) {
+      queue.processing = false;
+      return;
+    }
+
+    const job = queue.messages.shift();
+
+    await globalLimit(async () => {
+
+      try {
+        await handleMessage(job.msg);
+
+      } catch (err) {
+        console.error("Queue job error:", err);
+
+      } finally {
+
+        activeUsers.delete(job.sender);
+        userActiveChat.delete(job.sender);
+
+        // process next message
+        runNext();
+      }
+
+    });
+
+  };
+
+  runNext();
+}
 
   
 
