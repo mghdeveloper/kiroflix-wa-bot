@@ -258,25 +258,35 @@ async function searchAnime(title) {
     return [];
   }
 }
-async function generalReply(userText) {
+async function generalReply(userText, context = "") {
   const prompt = `
-You are Kiroflix Bot, a friendly WhatsApp anime assistant.
+You are Kiroflix Bot, a friendly WhatsApp anime & manhwa assistant.
+
+CONTEXT:
+${context || "No prior context available."}
 
 User may greet, thank, ask questions, or chat casually.
 
 Rules:
-- Reply naturally like a human (1–3 short sentences).
-- Use a few emojis.
-- If the user asks for suggestions or shows interest, recommend 1–3 anime or episodes.
+- Reply naturally like a human (1–3 short sentences). Use emojis.
+- Detect the user's language from their message and reply in the same language.
+- If the user asks for recommendations or shows interest:
+  • Suggest 1–3 anime, episodes, or manhwa.
+  • Provide details: 
+      - Anime: Name, Genre, Episodes, Short description
+      - Episode: Name, Number, Air date, Summary
+      - Manhwa: Name, Chapter, Genre, Summary
 - Mention available features when relevant:
   • Watch anime episodes
   • Generate subtitles
   • Read manhwa chapters
 - Avoid repeating generic replies.
+- Expand the reply vertically if many details are needed.
 
 User: "${userText}"
 Reply:
 `;
+
   const res = await askAI(prompt);
   return res || "👋 Hi! Send an anime or manhwa to start watching or reading 🍿";
 }
@@ -753,22 +763,20 @@ async function detectMessageType(userJid, currentText) {
 You classify messages for an Anime & Manhwa bot.
 
 TASKS
-1. Classify the user's message into ONE type:
-   - "casual"
-   - "anime"
-   - "manhwa"
-   - "unknown"
+1. Classify the user's message:
+   "anime" | "manhwa" | "casual" | "unknown"
 
-2. If the message refers to previous context (ex: "next episode", "episode 400"),
-   resolve it into a full message.
+2. Resolve references using conversation context
+   (example: "next episode" → "One Piece episode 401").
+
+3. Extract a short topic summary from recent messages
+   so casual replies know what the user was talking about.
 
 RULES
-- Only use "anime" if the user clearly wants to WATCH an anime episode.
-- Only use "manhwa" if the user clearly wants to READ a manhwa chapter.
-- If the user asks for recommendations, suggestions, explanations, or general talk
-  (ex: "recommend anime", "what should I watch", "best manhwa", "suggest something"),
-  classify as "casual".
-- Greetings, thanks, or chatting → "casual".
+- "anime" = user wants to WATCH an episode
+- "manhwa" = user wants to READ a chapter
+- Recommendations, suggestions, explanations, greetings → "casual"
+- If unclear → "unknown"
 
 CONTEXT:
 ${context}
@@ -776,11 +784,12 @@ ${context}
 Return ONLY JSON:
 
 {
-"type":"casual|anime|manhwa|unknown",
-"resolvedMessage":"complete resolved message"
+"type":"anime|manhwa|casual|unknown",
+"resolvedMessage":"resolved message",
+"topicContext":"short topic like 'One Piece episode 400' or 'Solo Leveling chapter 20' or null"
 }
 
-User message: "${currentText}"
+User: "${currentText}"
 `;
 
     let res = await askAI(prompt);
@@ -793,11 +802,15 @@ User message: "${currentText}"
     // 3️⃣ If resolvedMessage is empty, fallback to currentText
     if (!parsed.resolvedMessage) parsed.resolvedMessage = currentText;
 
-    return parsed;
+    // 4️⃣ Return parsed info along with the built context
+    return {
+      ...parsed,
+      context
+    };
 
   } catch (err) {
     logError("MESSAGE TYPE", err);
-    return { type: "unknown", resolvedMessage: currentText };
+    return { type: "unknown", resolvedMessage: currentText, context: currentText };
   }
 }
 async function logWAUsage({
@@ -1060,18 +1073,26 @@ Here is the latest available 👇
     });
   }
 }
-  async function handleGeneralRequest(text, from, thinkingKey) {
+  async function handleGeneralRequest(text, from, thinkingKey, context) {
   try {
-    const replyRaw = await generalReply(text);
-let reply = replyRaw;
+    // Use the passed context; if missing, fallback to building it
+    const convContext = context || await buildContext(from, text);
 
-try {
-  const parsed = JSON.parse(replyRaw);
-  if (parsed?.message) reply = parsed.message;
-} catch {}
+    // Pass the context to generalReply
+    const replyRaw = await generalReply(text, convContext);
 
+    let reply = replyRaw;
+
+    // If AI returned JSON with "message", extract it
+    try {
+      const parsed = JSON.parse(replyRaw);
+      if (parsed?.message) reply = parsed.message;
+    } catch {}
+
+    // Send the reply
     await sock.sendMessage(from, { text: reply, edit: thinkingKey });
 
+    // Log usage
     await logWAUsage({
       userJid: from,
       username: from,
@@ -1082,7 +1103,8 @@ try {
   } catch (err) {
     logError("GENERAL HANDLER", err);
     await sock.sendMessage(from, {
-      text: "⚠️ Failed to process your message"
+      text: "⚠️ Failed to process your message",
+      edit: thinkingKey
     });
   }
 }
@@ -1147,39 +1169,41 @@ if (!userData || userData.date !== today) {
     const thinkingKey = thinkingMsg.key;
 
     // 🧠 Detect message type
-const typeResult = await detectMessageType(userId, text);
-const type = typeResult.type;           // already "anime" | "manhwa" | etc.
-const resolvedText = typeResult.resolvedMessage;
+    // 🧠 Detect message type
+    const typeResult = await detectMessageType(userId, text);
+    const type = typeResult.type;           // "anime" | "manhwa" | etc.
+    const resolvedText = typeResult.resolvedMessage;
+    const conversationContext = typeResult.context; // ✅ get built context
 
-// 🎬 ANIME
-if (type === "anime") {
-  const intent = await parseIntent(resolvedText);
+    // 🎬 ANIME
+    if (type === "anime") {
+      const intent = await parseIntent(resolvedText);
 
-  if (!intent || intent.notFound) {
-    await sock.sendMessage(from, {
-      text: "❌ Could not detect anime",
-      edit: thinkingKey
-    });
-    return;
-  }
+      if (!intent || intent.notFound) {
+        await sock.sendMessage(from, {
+          text: "❌ Could not detect anime",
+          edit: thinkingKey
+        });
+        return;
+      }
 
-  await handleAnimeRequest(intent, resolvedText, from, thinkingKey);
-  return;
-}
+      await handleAnimeRequest(intent, resolvedText, from, thinkingKey);
+      return;
+    }
 
-// 📚 MANHWA
-if (type === "manhwa") {
-  await sock.sendMessage(from, {
-    text: "📚 Loading manhwa...",
-    edit: thinkingKey
-  });
+    // 📚 MANHWA
+    if (type === "manhwa") {
+      await sock.sendMessage(from, {
+        text: "📚 Loading manhwa...",
+        edit: thinkingKey
+      });
 
-  await handleManhwaRequest(resolvedText, from, sock, thinkingKey);
-  return;
-}
+      await handleManhwaRequest(resolvedText, from, sock, thinkingKey);
+      return;
+    }
 
-// 💬 CASUAL / UNKNOWN
-await handleGeneralRequest(resolvedText, from, thinkingKey);
+    // 💬 CASUAL / UNKNOWN → pass context to general request
+    await handleGeneralRequest(resolvedText, from, thinkingKey, conversationContext);
 
 } catch (err) {
   logError("MAIN HANDLER", err);
@@ -1259,23 +1283,3 @@ if (isGroup) {
 }
 
 startBot();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
