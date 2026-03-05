@@ -758,8 +758,10 @@ async function handleManhwaRequest(text, from, sock, thinkingKey) {
 }
 async function detectMessageType(userJid, currentText) {
   try {
+    // 1️⃣ Build full context including the current message
     const context = await buildContext(userJid, currentText);
 
+    // 2️⃣ Ask AI to resolve references and classify type
     const prompt = `
 You classify messages for an Anime & Manhwa bot.
 
@@ -823,15 +825,26 @@ User message:
 "${currentText}"
 `;
 
-    const res = await askAI(prompt);
-    return res;
-  } catch (err) {
-    console.error(err);
+
+    let res = await askAI(prompt);
+    res = res.replace(/```json|```/gi, "").trim();
+    const json = res.match(/\{[\s\S]*\}/)?.[0];
+    if (!json) throw new Error("No JSON");
+
+    const parsed = JSON.parse(json);
+
+    // 3️⃣ If resolvedMessage is empty, fallback to currentText
+    if (!parsed.resolvedMessage) parsed.resolvedMessage = currentText;
+
+    // 4️⃣ Return parsed info along with the built context
     return {
-      type: "unknown",
-      resolvedMessage: currentText,
-      topicContext: null
+      ...parsed,
+      context
     };
+
+  } catch (err) {
+    logError("MESSAGE TYPE", err);
+    return { type: "unknown", resolvedMessage: currentText, context: currentText };
   }
 }
 async function logWAUsage({
