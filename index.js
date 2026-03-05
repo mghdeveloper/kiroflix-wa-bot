@@ -758,28 +758,55 @@ async function handleManhwaRequest(text, from, sock, thinkingKey) {
 }
 async function detectMessageType(userJid, currentText) {
   try {
-    // 1️⃣ Build full context including the current message
     const context = await buildContext(userJid, currentText);
 
-    // 2️⃣ Ask AI to resolve references and classify type
     const prompt = `
 You classify messages for an Anime & Manhwa bot.
 
 TASKS
-1. Classify the user's message:
-   "anime" | "manhwa" | "casual" | "unknown"
+1️⃣ Classify the user's message into ONE type:
+"anime" | "manhwa" | "casual" | "unknown"
 
-2. Resolve references using conversation context
-   (example: "next episode" → "One Piece episode 401").
+2️⃣ Resolve references using conversation context
+(example: "next episode" → "One Piece episode 401").
 
-3. Extract a short topic summary from recent messages
-   so casual replies know what the user was talking about.
+3️⃣ Extract a short topic summary from recent messages.
 
-RULES
-- "anime" = user wants to WATCH an episode
-- "manhwa" = user wants to READ a chapter
-- Recommendations, suggestions, explanations, greetings → "casual"
-- If unclear → "unknown"
+STRICT CLASSIFICATION RULES
+
+✅ "anime"
+ONLY if the user CLEARLY wants to WATCH an episode NOW.
+Examples:
+- "send episode 5 of One Piece"
+- "watch naruto episode 20"
+- "give me attack on titan episode 1"
+- "next episode"
+
+✅ "manhwa"
+ONLY if the user CLEARLY wants to READ a chapter NOW.
+Examples:
+- "solo leveling chapter 20"
+- "read chapter 45"
+- "send next chapter"
+
+❌ DO NOT classify as anime/manhwa if the user is:
+- asking for recommendations
+- asking for explanations
+- asking about story or characters
+- asking what anime is good
+- asking for reviews
+- asking for info about an anime
+- general discussion
+
+These MUST be classified as "casual".
+
+Examples:
+"recommend anime" → casual  
+"what is solo leveling about" → casual  
+"best romance anime" → casual  
+"is one piece good" → casual  
+
+If the message intent is unclear → "unknown".
 
 CONTEXT:
 ${context}
@@ -792,28 +819,19 @@ Return ONLY JSON:
 "topicContext":"short topic like 'One Piece episode 400' or 'Solo Leveling chapter 20' or null"
 }
 
-User: "${currentText}"
+User message:
+"${currentText}"
 `;
 
-    let res = await askAI(prompt);
-    res = res.replace(/```json|```/gi, "").trim();
-    const json = res.match(/\{[\s\S]*\}/)?.[0];
-    if (!json) throw new Error("No JSON");
-
-    const parsed = JSON.parse(json);
-
-    // 3️⃣ If resolvedMessage is empty, fallback to currentText
-    if (!parsed.resolvedMessage) parsed.resolvedMessage = currentText;
-
-    // 4️⃣ Return parsed info along with the built context
-    return {
-      ...parsed,
-      context
-    };
-
+    const res = await askAI(prompt);
+    return res;
   } catch (err) {
-    logError("MESSAGE TYPE", err);
-    return { type: "unknown", resolvedMessage: currentText, context: currentText };
+    console.error(err);
+    return {
+      type: "unknown",
+      resolvedMessage: currentText,
+      topicContext: null
+    };
   }
 }
 async function logWAUsage({
