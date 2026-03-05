@@ -281,7 +281,7 @@ BEHAVIOR RULES:
 - Mention available features when relevant:
   • Watch anime episodes
   • Generate subtitles
-  • Read manhwa chapters
+  • Read manhwa chapters only in english and manga not supported
 - Avoid repeating generic replies.
 
 User message:
@@ -799,6 +799,7 @@ Examples:
 - asking for reviews
 - asking for info about an anime
 - general discussion
+-manga not supported only manhwa
 
 These MUST be classified as "casual".
 
