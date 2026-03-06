@@ -632,7 +632,7 @@ async function getChapterImages(chapterPath) {
 // 📄 STREAM PDF BUILDER
 // ===============================
 // ===============================
-// 📄 STREAM PDF BUILDER (PARALLEL IMAGE FETCH)
+// 📄 STREAM PDF BUILDER (PARALLEL + PROGRESS)
 // ===============================
 async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
   const MAX_PAGES = 120;
@@ -647,13 +647,17 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
     doc.on("end", () => resolve(Buffer.concat(chunks)))
   );
 
+  // Track downloaded images
+  const downloadedImages = new Array(urls.length).fill(null);
+  let completed = 0;
+
   await sock.sendMessage(from, {
     text: `📄 Generating PDF... 0/${urls.length}`,
     edit: thinkingKey
   });
 
-  // Step 1: Fetch all images in parallel
-  const imagePromises = urls.map(async (url, index) => {
+  // Helper: fetch + process single image
+  const fetchImage = async (url, index) => {
     try {
       const proxiedUrl = `https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(url)}`;
       const res = await axios.get(proxiedUrl, {
@@ -669,31 +673,34 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
         .jpeg({ quality: 85 })
         .toBuffer();
 
-      return { index, imgBuffer }; // keep track of order
+      downloadedImages[index] = imgBuffer;
     } catch (err) {
       console.log("❌ Image failed:", url, err.message);
-      return { index, imgBuffer: null };
+      downloadedImages[index] = null;
+    } finally {
+      completed++;
+      // Update progress dynamically
+      if (completed % 5 === 0 || completed === urls.length) {
+        sock.sendMessage(from, {
+          text: `📄 Downloaded images: ${completed}/${urls.length}`,
+          edit: thinkingKey
+        }).catch(() => {});
+      }
     }
-  });
+  };
 
-  const images = await Promise.all(imagePromises);
+  // Step 1: fetch all images in parallel
+  const fetchPromises = urls.map((url, i) => fetchImage(url, i));
+  await Promise.all(fetchPromises);
 
-  // Step 2: Add images to PDF sequentially
-  for (let i = 0; i < images.length; i++) {
-    const { imgBuffer } = images[i];
+  // Step 2: add images sequentially in order to PDF
+  for (let i = 0; i < downloadedImages.length; i++) {
+    const imgBuffer = downloadedImages[i];
     if (!imgBuffer) continue;
 
     const meta = await sharp(imgBuffer).metadata();
     doc.addPage({ size: [meta.width, meta.height] });
     doc.image(imgBuffer, 0, 0, { width: meta.width, height: meta.height });
-
-    // Progress update every 10 pages
-    if (i % 10 === 0 || i === images.length - 1) {
-      await sock.sendMessage(from, {
-        text: `📄 Generating PDF... ${i + 1}/${urls.length}`,
-        edit: thinkingKey
-      });
-    }
   }
 
   doc.end();
