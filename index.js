@@ -418,177 +418,184 @@ function logResponse(tag, data) {
 }
 
 // ===============================
-// 🔹 MANHWA INTENT PARSER
-// ===============================
-async function parseManhwaIntent(text) {
-  const searchData = await searchReference(text);
-  try {
-    const prompt = `
-You are a manhwa title parser.
-
-You are given real search engine results.
-
-Use them ONLY to:
-- confirm official English title
-- correct typos
-- detect correct chapter number
-
---------------------------------
-SEARCH RESULTS:
-${searchData}
---------------------------------
-
-GOAL:
-1️⃣ Convert title to official English name if confirmed
-2️⃣ Extract chapter number
-3️⃣ If chapter missing → 1
-4️⃣ If unclear → {"notFound": true}
-
-Return ONLY JSON:
-
-{
-  "title": "official manhwa title",
-  "chapter": number,
-  "notFound": false
-}
-
-User: ${text}
-`;
-    let res = await askAI(prompt);
-    logResponse("AI_INTENT_RAW", res);
-
-    res = res.replace(/```json|```/gi, "").trim();
-    const json = res.match(/\{[\s\S]*\}/)?.[0];
-    if (!json) throw new Error("No JSON found in AI response");
-
-    const parsed = JSON.parse(json);
-    logResponse("AI_INTENT_PARSED", parsed);
-    return parsed;
-
-  } catch (err) {
-    logResponse("MANHWA_INTENT_ERROR", { error: err.message });
-    return null;
-  }
-}
-// ===============================
-// 🔎 SEARCH MANHWA
+// 🔎 SEARCH MANHWA (V2)
 // ===============================
 async function searchManhwa(title) {
   try {
+
     const { data } = await axios.get(
-      "https://kiroflix.site/backend/manga_search-v1.php",
+      "https://kiroflix.site/backend/manga_search-v2.php",
       { params: { q: title } }
     );
-    logResponse("SEARCH_MANHWA", data);
+
+    logResponse("SEARCH_MANHWA_V2", data);
+
     if (!data?.success) return [];
+
     return data.results || [];
+
   } catch (err) {
-    logResponse("SEARCH_MANHWA_ERROR", { error: err.message });
+
+    logResponse("SEARCH_MANHWA_ERROR", {
+      error: err.message
+    });
+
     return [];
   }
 }
 
+
 // ===============================
-// 🤖 AI BEST MATCH SELECTOR
+// 🤖 AI BEST MATCH SELECTOR (MINIMAL TOKENS)
 // ===============================
 async function chooseBestManhwa(intent, results) {
+
   try {
-    const minimal = results.map(r => ({
-      id: r.id,
+
+    const minimal = results.slice(0, 15).map(r => ({
+      hash: r.hash_id,
       title: r.title,
-      alt: r.alt_name,
-      score: r.score,
-      popularity: r.popularity
+      alt: r.alt_titles,
+      score: r.rated_avg,
+      follows: r.follows_total
     }));
 
     const prompt = `
 User searching: "${intent.title}"
 
-Select the BEST match.
-Prioritize:
-- Exact title match
-- Alt name match
-- Highest score
-- Highest popularity
+Choose the BEST match.
 
-Return ONLY the id.
+Prioritize:
+1. Exact title
+2. Alt title match
+3. Highest rating
+4. Highest follows
+
+Return ONLY the hash.
 
 ${JSON.stringify(minimal)}
 `;
 
     const res = await askAI(prompt);
+
     logResponse("AI_BEST_MATCH_RAW", res);
 
-    const id = res.match(/[a-z0-9\-]+/)?.[0];
-    const best = results.find(r => r.id === id) || results[0];
+    const hash = res.match(/[a-z0-9]+/)?.[0];
+
+    const best =
+      results.find(r => r.hash_id === hash) ||
+      results[0];
+
     logResponse("AI_BEST_MATCH_CHOSEN", best);
 
     return best;
+
   } catch (err) {
-    logResponse("AI_BEST_MATCH_ERROR", { error: err.message });
+
+    logResponse("AI_BEST_MATCH_ERROR", {
+      error: err.message
+    });
+
     return results[0];
   }
 }
 
+
 // ===============================
-// 📖 GET MANHWA DETAILS
+// 📖 GET CHAPTER (V2)
 // ===============================
-async function getManhwaDetails(id) {
+async function getChapter(hash, chapterNumber) {
+
   try {
+
     const { data } = await axios.get(
-      "https://kiroflix.site/backend/manga-details_v1.php",
-      { params: { id } }
+      "https://kiroflix.site/backend/get_chapter-v2.php",
+      {
+        params: {
+          hash,
+          number: chapterNumber
+        }
+      }
     );
-    logResponse("MANHWA_DETAILS", data);
-    if (!data?.success) return null;
-    return data.data;
+
+    logResponse("GET_CHAPTER_V2", data);
+
+    const chapters = data?.result?.items || [];
+
+    if (!chapters.length) return null;
+
+    // prioritize official chapter
+    const official =
+      chapters.find(c => c.is_official === 1) ||
+      chapters[0];
+
+    return official;
+
   } catch (err) {
-    logResponse("MANHWA_DETAILS_ERROR", { error: err.message });
+
+    logResponse("GET_CHAPTER_ERROR", {
+      error: err.message
+    });
+
     return null;
   }
 }
 
+
 // ===============================
-// 🖼 GET CHAPTER IMAGES
+// 🖼 GET CHAPTER IMAGES (V2)
 // ===============================
-// ===============================
-// 🖼 GET CHAPTER IMAGES
-// ===============================
-async function getChapterImages(chapterUrl) {
+async function getChapterImages(chapterPath) {
+
   try {
+
     const { data } = await axios.get(
-      "https://kiroflix.site/backend/chapter_images_v1.php",
-      { params: { url: chapterUrl } }
+      "https://kiroflix.site/backend/chapter_images_v2.php",
+      {
+        params: {
+          chapter: chapterPath
+        }
+      }
     );
 
-    logResponse("CHAPTER_IMAGES", data);
+    logResponse("CHAPTER_IMAGES_V2", data);
 
-    if (!data?.success) return [];
+    if (data?.status !== 200) return [];
 
-    return data.pages || [];
+    return data.images || [];
 
   } catch (err) {
-    logResponse("CHAPTER_IMAGES_ERROR", { error: err.message });
+
+    logResponse("CHAPTER_IMAGES_ERROR", {
+      error: err.message
+    });
+
     return [];
   }
 }
 
+
 // ===============================
-// 📄 STREAM PDF BUILDER (LOW RAM)
+// 📄 STREAM PDF BUILDER
 // ===============================
 async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
 
   const MAX_PAGES = 120;
+
   const urls = imageUrls.slice(0, MAX_PAGES);
 
-  const doc = new PDFDocument({ autoFirstPage: false });
+  const doc = new PDFDocument({
+    autoFirstPage: false
+  });
 
   const chunks = [];
 
   doc.on("data", chunk => chunks.push(chunk));
 
   const endPromise = new Promise(resolve =>
-    doc.on("end", () => resolve(Buffer.concat(chunks)))
+    doc.on("end", () =>
+      resolve(Buffer.concat(chunks))
+    )
   );
 
   await sock.sendMessage(from, {
@@ -600,17 +607,11 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
 
     try {
 
-      const proxyUrl =
-        `https://image-fetcher-1.onrender.com/fetch?url=${encodeURIComponent(urls[i])}`;
-
-      const res = await axios.get(proxyUrl, {
+      const res = await axios.get(urls[i], {
         responseType: "arraybuffer",
-        timeout: 20000,
-        maxContentLength: 20 * 1024 * 1024,
-        maxBodyLength: 20 * 1024 * 1024
+        timeout: 20000
       });
 
-      // process image
       const img = await sharp(res.data)
         .rotate()
         .resize(1200, null, {
@@ -631,16 +632,19 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
         height: meta.height
       });
 
-      // progress update every 10 pages
       if (i % 10 === 0 || i === urls.length - 1) {
+
         await sock.sendMessage(from, {
           text: `📄 Generating PDF... ${i + 1}/${urls.length}`,
           edit: thinkingKey
         });
+
       }
 
     } catch (err) {
-      console.log("❌ Image failed:", urls[i]);
+
+      console.log("Image failed:", urls[i]);
+
     }
   }
 
@@ -649,8 +653,9 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
   return endPromise;
 }
 
+
 // ===============================
-// 🚀 MAIN MANHWA HANDLER
+// 🚀 MAIN MANHWA HANDLER (V2)
 // ===============================
 async function handleManhwaRequest(text, from, sock, thinkingKey) {
 
@@ -659,9 +664,11 @@ async function handleManhwaRequest(text, from, sock, thinkingKey) {
     const intent = await parseManhwaIntent(text);
 
     if (!intent || intent.notFound) {
-      return await sock.sendMessage(from, {
+
+      return sock.sendMessage(from, {
         text: "❌ Could not detect manhwa title."
       });
+
     }
 
     const searchMsg = await sock.sendMessage(from, {
@@ -674,46 +681,47 @@ async function handleManhwaRequest(text, from, sock, thinkingKey) {
     const results = await searchManhwa(intent.title);
 
     if (!results.length) {
-      return await sock.sendMessage(from, {
+
+      return sock.sendMessage(from, {
         text: "❌ Manhwa not found.",
         edit: searchKey
       });
+
     }
 
     const manhwa = await chooseBestManhwa(intent, results);
 
-    const details = await getManhwaDetails(manhwa.id);
-
-    if (!details) {
-      return await sock.sendMessage(from, {
-        text: "❌ Failed to load details.",
-        edit: searchKey
-      });
-    }
-
-    let chapter =
-      details.chapters.find(c => c.chapter_no === intent.chapter) ||
-      details.chapters[0];
+    const chapter = await getChapter(
+      manhwa.hash_id,
+      intent.chapter
+    );
 
     if (!chapter) {
-      return await sock.sendMessage(from, {
-        text: "❌ No chapters available.",
+
+      return sock.sendMessage(from, {
+        text: "❌ Chapter not found.",
         edit: searchKey
       });
+
     }
 
+    const chapterPath =
+`${manhwa.slug}/${chapter.chapter_id}-chapter-${chapter.number}`;
+
     await sock.sendMessage(from, {
-      text: `📖 Loading ${chapter.name}...`,
+      text: `📖 Loading chapter ${chapter.number}...`,
       edit: searchKey
     });
 
-    const imageUrls = await getChapterImages(chapter.url);
+    const imageUrls = await getChapterImages(chapterPath);
 
     if (!imageUrls.length) {
-      return await sock.sendMessage(from, {
+
+      return sock.sendMessage(from, {
         text: "❌ Chapter images unavailable.",
         edit: searchKey
       });
+
     }
 
     const pdfBuffer = await buildPDFStream(
@@ -724,18 +732,17 @@ async function handleManhwaRequest(text, from, sock, thinkingKey) {
     );
 
     const caption =
-`📖 *${details.title}*
-⭐ Score: ${details.score || "N/A"}
-📌 Status: ${details.status || "Unknown"}
-📚 Chapter: ${chapter.name}
-🖊 Author: ${details.author || "Unknown"}
-🏷 Genres: ${details.genres?.join(", ") || "N/A"}
+`📖 *${manhwa.title}*
+⭐ Rating: ${manhwa.rated_avg || "N/A"}
+🔥 Followers: ${manhwa.follows_total || 0}
+📚 Chapter: ${chapter.number}
+📌 Status: ${manhwa.status}
 
-🔥 ${details.synopsis?.substring(0, 250) || "No synopsis available."}...`;
+${(manhwa.synopsis || "").substring(0, 250)}...`;
 
     await sock.sendMessage(from, {
       document: pdfBuffer,
-      fileName: `${details.title}_Chapter_${chapter.chapter_no}.pdf`,
+      fileName: `${manhwa.slug}_chapter_${chapter.number}.pdf`,
       caption
     });
 
