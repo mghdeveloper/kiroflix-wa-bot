@@ -759,7 +759,7 @@ async function handleManhwaRequest(text, from, sock, thinkingKey) {
     }
 
     const chapterPath =
-`${manhwa.slug}/${chapter.chapter_id}-chapter-${chapter.number}`;
+`${manhwa.hash_id}-${manhwa.slug}/${chapter.chapter_id}-chapter-${chapter.number}`;
 
     await sock.sendMessage(from, {
       text: `📖 Loading chapter ${chapter.number}...`,
