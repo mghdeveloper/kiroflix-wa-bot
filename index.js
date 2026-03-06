@@ -634,21 +634,15 @@ async function getChapterImages(chapterPath) {
 async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
 
   const MAX_PAGES = 120;
-
   const urls = imageUrls.slice(0, MAX_PAGES);
 
-  const doc = new PDFDocument({
-    autoFirstPage: false
-  });
-
+  const doc = new PDFDocument({ autoFirstPage: false });
   const chunks = [];
 
   doc.on("data", chunk => chunks.push(chunk));
 
   const endPromise = new Promise(resolve =>
-    doc.on("end", () =>
-      resolve(Buffer.concat(chunks))
-    )
+    doc.on("end", () => resolve(Buffer.concat(chunks)))
   );
 
   await sock.sendMessage(from, {
@@ -657,55 +651,44 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
   });
 
   for (let i = 0; i < urls.length; i++) {
-
     try {
+      // Wrap the original image URL with your proxy
+      const proxiedUrl = `https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(urls[i])}`;
 
-      const res = await axios.get(urls[i], {
+      const res = await axios.get(proxiedUrl, {
         responseType: "arraybuffer",
-        timeout: 20000
+        timeout: 20000,
+        maxContentLength: 20 * 1024 * 1024,
+        maxBodyLength: 20 * 1024 * 1024
       });
 
       const img = await sharp(res.data)
         .rotate()
-        .resize(1200, null, {
-          fit: "inside",
-          withoutEnlargement: true
-        })
+        .resize(1200, null, { fit: "inside", withoutEnlargement: true })
         .jpeg({ quality: 85 })
         .toBuffer();
 
       const meta = await sharp(img).metadata();
 
-      doc.addPage({
-        size: [meta.width, meta.height]
-      });
+      doc.addPage({ size: [meta.width, meta.height] });
+      doc.image(img, 0, 0, { width: meta.width, height: meta.height });
 
-      doc.image(img, 0, 0, {
-        width: meta.width,
-        height: meta.height
-      });
-
+      // Progress update every 10 pages
       if (i % 10 === 0 || i === urls.length - 1) {
-
         await sock.sendMessage(from, {
           text: `📄 Generating PDF... ${i + 1}/${urls.length}`,
           edit: thinkingKey
         });
-
       }
 
     } catch (err) {
-
-      console.log("Image failed:", urls[i]);
-
+      console.log("❌ Image failed:", urls[i], err.message);
     }
   }
 
   doc.end();
-
   return endPromise;
 }
-
 
 // ===============================
 // 🚀 MAIN MANHWA HANDLER (V2)
