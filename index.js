@@ -649,27 +649,44 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
 
   // Temp folder for images
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "manhwa-"));
-
   let completed = 0;
+  const sentThumbnails = [];
 
+  // Initial progress message
   await sock.sendMessage(from, {
     text: `📄 Generating PDF... 0/${urls.length}`,
     edit: thinkingKey
   });
 
-  // Download + resize + save temp file
   const fetchImage = async (url, index) => {
     try {
       const proxiedUrl = `https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(url)}`;
-      const res = await axios.get(proxiedUrl, { responseType: "arraybuffer", timeout: 20000 });
+      const res = await axios.get(proxiedUrl, {
+        responseType: "arraybuffer",
+        timeout: 120000, // 2 minutes
+        maxContentLength: 50 * 1024 * 1024,
+        maxBodyLength: 50 * 1024 * 1024
+      });
+
       const buffer = await sharp(res.data)
         .rotate()
-        .resize(1200, null, { fit: "inside", withoutEnlargement: true })
-        .jpeg({ quality: 85 })
+        .resize(800, null, { fit: "inside", withoutEnlargement: true }) // smaller for preview
+        .jpeg({ quality: 70 })
         .toBuffer();
 
       const tempPath = path.join(tempDir, `img_${index}.jpg`);
       fs.writeFileSync(tempPath, buffer);
+
+      // Send live thumbnail preview
+      sentThumbnails.push(buffer);
+      // Only send up to 5 images per edit to avoid large messages
+      const previewImages = sentThumbnails.slice(-5).map(buf => ({ image: buf }));
+      await sock.sendMessage(from, {
+        text: `📄 Downloaded images: ${completed + 1}/${urls.length}`,
+        edit: thinkingKey,
+        ...((previewImages.length > 0) ? { media: previewImages } : {})
+      }).catch(() => {});
+
       return tempPath;
 
     } catch (err) {
@@ -677,10 +694,6 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
       return null;
     } finally {
       completed++;
-      await sock.sendMessage(from, {
-        text: `📄 Downloaded images: ${completed}/${urls.length}`,
-        edit: thinkingKey
-      }).catch(() => {});
     }
   };
 
@@ -698,11 +711,10 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
     fs.unlinkSync(tempPath); // Delete temp image after adding
   }
 
-  fs.rmdirSync(tempDir, { recursive: true }); // Clean up folder
+  fs.rmdirSync(tempDir, { recursive: true });
   doc.end();
   return endPromise;
 }
-
 // ===============================
 // 🚀 MAIN MANHWA HANDLER (V2)
 // ===============================
