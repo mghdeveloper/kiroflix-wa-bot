@@ -418,6 +418,59 @@ function logResponse(tag, data) {
 }
 
 // ===============================
+// 🔹 MANHWA INTENT PARSER
+// ===============================
+async function parseManhwaIntent(text) {
+  const searchData = await searchReference(text);
+  try {
+    const prompt = `
+You are a manhwa title parser.
+
+You are given real search engine results.
+
+Use them ONLY to:
+- confirm official English title
+- correct typos
+- detect correct chapter number
+
+--------------------------------
+SEARCH RESULTS:
+${searchData}
+--------------------------------
+
+GOAL:
+1️⃣ Convert title to official English name if confirmed
+2️⃣ Extract chapter number
+3️⃣ If chapter missing → 1
+4️⃣ If unclear → {"notFound": true}
+
+Return ONLY JSON:
+
+{
+  "title": "official manhwa title",
+  "chapter": number,
+  "notFound": false
+}
+
+User: ${text}
+`;
+    let res = await askAI(prompt);
+    logResponse("AI_INTENT_RAW", res);
+
+    res = res.replace(/```json|```/gi, "").trim();
+    const json = res.match(/\{[\s\S]*\}/)?.[0];
+    if (!json) throw new Error("No JSON found in AI response");
+
+    const parsed = JSON.parse(json);
+    logResponse("AI_INTENT_PARSED", parsed);
+    return parsed;
+
+  } catch (err) {
+    logResponse("MANHWA_INTENT_ERROR", { error: err.message });
+    return null;
+  }
+}
+// ===============================
 // 🔎 SEARCH MANHWA (V2)
 // ===============================
 async function searchManhwa(title) {
