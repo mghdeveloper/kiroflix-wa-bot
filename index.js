@@ -638,74 +638,65 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
   const urls = imageUrls.slice(0, MAX_PAGES);
 
   const doc = new PDFDocument({ autoFirstPage: false });
-  const chunks = [];
-  doc.on("data", chunk => chunks.push(chunk));
-  const endPromise = new Promise(resolve => doc.on("end", () => resolve(Buffer.concat(chunks))));
+  const tempPDFPath = path.join(os.tmpdir(), `manhwa_${Date.now()}.pdf`);
+  const pdfStream = fs.createWriteStream(tempPDFPath);
+  doc.pipe(pdfStream);
 
   let completed = 0;
 
-  // =============================
-  // 1️⃣ Download first image alone
-  // =============================
-  const firstUrl = urls[0];
-  const firstBuffer = await axios.get(`https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(firstUrl)}`, {
-    responseType: 'arraybuffer',
-    timeout: 120000
-  }).then(res => res.data).catch(() => null);
-
-  if (firstBuffer) {
-    const sharpBuffer = await sharp(firstBuffer).rotate().resize(1200, null, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer();
-    const meta = await sharp(sharpBuffer).metadata();
-    doc.addPage({ size: [meta.width, meta.height] });
-    doc.image(sharpBuffer, 0, 0, { width: meta.width, height: meta.height });
-  }
-  completed++;
-
-  await sock.sendMessage(from, { text: `📄 Downloaded images: 1/${urls.length}`, edit: thinkingKey });
-
-  // =============================
-  // 2️⃣ Stream remaining images directly
-  // =============================
-  const remainingUrls = urls.slice(1);
-
-  // Temporary directory for streaming small buffers
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "manhwa-"));
-
-  const promises = remainingUrls.map(async (url, index) => {
+  // 🔹 Helper to download and process one image
+  const processImage = async (url, index) => {
     try {
+      const tempPath = path.join(os.tmpdir(), `img_${Date.now()}_${index}.jpg`);
       const res = await axios.get(`https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(url)}`, {
         responseType: "arraybuffer",
         timeout: 120000
       });
-      // Use sharp to resize and stream to a temp file
-      const tempPath = path.join(tempDir, `img_${index}.jpg`);
-      await sharp(res.data).rotate().resize(1200, null, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 80 }).toFile(tempPath);
-      return tempPath;
-    } catch {
-      return null;
-    } finally {
+
+      await sharp(res.data)
+        .rotate()
+        .resize(1200, null, { fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 80 })
+        .toFile(tempPath);
+
+      const meta = await sharp(tempPath).metadata();
+      doc.addPage({ size: [meta.width, meta.height] });
+      doc.image(tempPath, 0, 0, { width: meta.width, height: meta.height });
+
+      fs.unlinkSync(tempPath);
+
       completed++;
-      // Optional: send progress every 10 images
-      if (completed % 10 === 0 || completed === urls.length) {
-        sock.sendMessage(from, { text: `📄 Downloaded images: ${completed}/${urls.length}`, edit: thinkingKey }).catch(() => {});
+      if (completed % 5 === 0 || completed === urls.length) {
+        await sock.sendMessage(from, {
+          text: `📄 Downloaded images: ${completed}/${urls.length}`,
+          edit: thinkingKey
+        }).catch(() => {});
       }
+
+    } catch (err) {
+      completed++;
+      console.error(`❌ Failed to process image ${index}:`, err.message);
     }
-  });
+  };
 
-  const tempPaths = await Promise.all(promises);
+  // 1️⃣ Process first image alone for immediate preview
+  if (urls[0]) await processImage(urls[0], 0);
 
-  // Add images to PDF sequentially and delete temp files immediately
-  for (const tempPath of tempPaths) {
-    if (!tempPath) continue;
-    const meta = await sharp(tempPath).metadata();
-    doc.addPage({ size: [meta.width, meta.height] });
-    doc.image(tempPath, 0, 0, { width: meta.width, height: meta.height });
-    fs.unlinkSync(tempPath);
-  }
+  // 2️⃣ Process remaining images in parallel with limit
+  const pLimit = require("p-limit")(5); // limit concurrency to 5
+  const remaining = urls.slice(1);
+  await Promise.all(remaining.map((url, i) => pLimit(() => processImage(url, i + 1))));
 
-  fs.rmdirSync(tempDir, { recursive: true });
   doc.end();
-  return endPromise;
+
+  return new Promise((resolve, reject) => {
+    pdfStream.on("finish", () => {
+      const buffer = fs.readFileSync(tempPDFPath);
+      fs.unlinkSync(tempPDFPath);
+      resolve(buffer);
+    });
+    pdfStream.on("error", reject);
+  });
 }
 // ===============================
 // 🚀 MAIN MANHWA HANDLER (V2)
