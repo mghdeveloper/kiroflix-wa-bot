@@ -633,47 +633,78 @@ async function getChapterImages(chapterPath) {
 
 
 
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const axios = require("axios");
+const sharp = require("sharp");
+const PDFDocument = require("pdfkit");
+const { pipeline } = require("stream/promises");
+
 async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
+
   const MAX_PAGES = 120;
+  const CONCURRENCY = 8;
+
   const urls = imageUrls.slice(0, MAX_PAGES);
 
-  const tempPDFPath = path.join(os.tmpdir(), `manhwa_${Date.now()}.pdf`);
-  const pdfStream = fs.createWriteStream(tempPDFPath);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "manhwa_"));
+  const tempPDFPath = path.join(tempDir, "output.pdf");
 
+  const pdfStream = fs.createWriteStream(tempPDFPath);
   const doc = new PDFDocument({ autoFirstPage: false });
+
   doc.pipe(pdfStream);
 
   let completed = 0;
-  const limit = pLimit(2); // lower concurrency to reduce memory spikes
+  let nextIndex = 0;
 
-  const processImage = async (url, index) => {
-    const tempPath = path.join(os.tmpdir(), `img_${Date.now()}_${index}.jpg`);
+  async function downloadAndResize(url, index) {
+
+    const rawPath = path.join(tempDir, `raw_${index}.img`);
+    const finalPath = path.join(tempDir, `img_${index}.jpg`);
+
     try {
-      // download image as arraybuffer
-      const res = await axios.get(`https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(url)}`, {
-        responseType: "arraybuffer",
+
+      const res = await axios({
+        url: `https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(url)}`,
+        method: "GET",
+        responseType: "stream",
         timeout: 120000
       });
 
-      // save and resize
-      await sharp(res.data)
+      await pipeline(res.data, fs.createWriteStream(rawPath));
+
+      await sharp(rawPath)
         .rotate()
         .resize(1200, null, { fit: "inside", withoutEnlargement: true })
         .jpeg({ quality: 80 })
-        .toFile(tempPath);
+        .toFile(finalPath);
 
-      const meta = await sharp(tempPath).metadata();
+      fs.unlinkSync(rawPath);
 
-      // add page to PDF using the disk file
-      doc.addPage({ size: [meta.width, meta.height] });
-      doc.image(tempPath, 0, 0, { width: meta.width, height: meta.height });
+      return finalPath;
 
     } catch (err) {
-      console.error(`❌ Failed to process image ${index}:`, err.message);
-    } finally {
-      // delete immediately to free disk
-      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      console.error("❌ Image failed:", index, err.message);
+      return null;
+    }
+  }
+
+  const results = new Array(urls.length);
+
+  async function worker() {
+    while (true) {
+
+      const i = nextIndex++;
+      if (i >= urls.length) break;
+
+      const file = await downloadAndResize(urls[i], i);
+
+      results[i] = file;
+
       completed++;
+
       if (completed % 5 === 0 || completed === urls.length) {
         await sock.sendMessage(from, {
           text: `📄 Downloaded images: ${completed}/${urls.length}`,
@@ -681,26 +712,46 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
         }).catch(() => {});
       }
     }
-  };
+  }
 
-  // first image alone for preview
-  if (urls[0]) await processImage(urls[0], 0);
+  // Start workers
+  await Promise.all(
+    Array.from({ length: CONCURRENCY }, worker)
+  );
 
-  // rest in limited parallel
-  const remaining = urls.slice(1);
-  for (const fn of remaining.map((url, i) => () => processImage(url, i + 1))) {
-    await limit(fn); // sequential-ish streaming
+  // Build PDF sequentially
+  for (let i = 0; i < results.length; i++) {
+
+    const file = results[i];
+    if (!file) continue;
+
+    const meta = await sharp(file).metadata();
+
+    doc.addPage({ size: [meta.width, meta.height] });
+
+    doc.image(file, 0, 0, {
+      width: meta.width,
+      height: meta.height
+    });
+
+    fs.unlinkSync(file);
   }
 
   doc.end();
 
   return new Promise((resolve, reject) => {
+
     pdfStream.on("finish", () => {
+
       const buffer = fs.readFileSync(tempPDFPath);
-      fs.unlinkSync(tempPDFPath);
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+
       resolve(buffer);
     });
+
     pdfStream.on("error", reject);
+
   });
 }
 // ===============================
