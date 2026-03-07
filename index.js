@@ -20,7 +20,7 @@ const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-
+const { pipeline } = require("stream/promises");
 let qrCodeDataURL = null; // store latest QR code
 // Maximum message length allowed for processing
 const MAX_MESSAGE_LENGTH = 300; // or whatever limit you prefer
@@ -633,13 +633,7 @@ async function getChapterImages(chapterPath) {
 
 
 
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const axios = require("axios");
-const sharp = require("sharp");
-const PDFDocument = require("pdfkit");
-const { pipeline } = require("stream/promises");
+
 
 async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
 
