@@ -17,6 +17,10 @@ const pLimit = require("p-limit");
 const downloadLimit = pLimit(5);
 const sharp = require("sharp");
 const PDFDocument = require("pdfkit");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+
 let qrCodeDataURL = null; // store latest QR code
 // Maximum message length allowed for processing
 const MAX_MESSAGE_LENGTH = 300; // or whatever limit you prefer
@@ -628,6 +632,7 @@ async function getChapterImages(chapterPath) {
 }
 
 
+
 async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
   const MAX_PAGES = 120;
   const urls = imageUrls.slice(0, MAX_PAGES);
@@ -639,57 +644,66 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
 
   let completed = 0;
 
-  // Helper to download and process an image
-  const fetchImageBuffer = async (url) => {
-    try {
-      const proxiedUrl = `https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(url)}`;
-      const res = await axios.get(proxiedUrl, { responseType: "arraybuffer", timeout: 120000 });
-      const buffer = await sharp(res.data)
-        .rotate()
-        .resize(1200, null, { fit: "inside", withoutEnlargement: true })
-        .jpeg({ quality: 80 })
-        .toBuffer();
-      completed++;
-      return buffer;
-    } catch (err) {
-      console.log("❌ Image failed:", url, err.message);
-      completed++;
-      return null;
-    }
-  };
+  // =============================
+  // 1️⃣ Download first image alone
+  // =============================
+  const firstUrl = urls[0];
+  const firstBuffer = await axios.get(`https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(firstUrl)}`, {
+    responseType: 'arraybuffer',
+    timeout: 120000
+  }).then(res => res.data).catch(() => null);
 
-  // =============================
-  // 1️⃣ Fetch the first image alone
-  // =============================
-  const firstBuffer = await fetchImageBuffer(urls[0]);
   if (firstBuffer) {
-    const meta = await sharp(firstBuffer).metadata();
+    const sharpBuffer = await sharp(firstBuffer).rotate().resize(1200, null, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer();
+    const meta = await sharp(sharpBuffer).metadata();
     doc.addPage({ size: [meta.width, meta.height] });
-    doc.image(firstBuffer, 0, 0, { width: meta.width, height: meta.height });
+    doc.image(sharpBuffer, 0, 0, { width: meta.width, height: meta.height });
   }
+  completed++;
 
-  // Send progress after first image
-  await sock.sendMessage(from, {
-    text: `📄 Downloaded images: 1/${urls.length}`,
-    edit: thinkingKey
-  });
+  await sock.sendMessage(from, { text: `📄 Downloaded images: 1/${urls.length}`, edit: thinkingKey });
 
   // =============================
-  // 2️⃣ Fetch remaining images in parallel
+  // 2️⃣ Stream remaining images directly
   // =============================
   const remainingUrls = urls.slice(1);
-  const promises = remainingUrls.map(url => fetchImageBuffer(url));
-  const buffers = await Promise.all(promises);
 
-  // Add all remaining images to PDF
-  for (const buffer of buffers) {
-    if (!buffer) continue;
-    const meta = await sharp(buffer).metadata();
+  // Temporary directory for streaming small buffers
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "manhwa-"));
+
+  const promises = remainingUrls.map(async (url, index) => {
+    try {
+      const res = await axios.get(`https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(url)}`, {
+        responseType: "arraybuffer",
+        timeout: 120000
+      });
+      // Use sharp to resize and stream to a temp file
+      const tempPath = path.join(tempDir, `img_${index}.jpg`);
+      await sharp(res.data).rotate().resize(1200, null, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 80 }).toFile(tempPath);
+      return tempPath;
+    } catch {
+      return null;
+    } finally {
+      completed++;
+      // Optional: send progress every 10 images
+      if (completed % 10 === 0 || completed === urls.length) {
+        sock.sendMessage(from, { text: `📄 Downloaded images: ${completed}/${urls.length}`, edit: thinkingKey }).catch(() => {});
+      }
+    }
+  });
+
+  const tempPaths = await Promise.all(promises);
+
+  // Add images to PDF sequentially and delete temp files immediately
+  for (const tempPath of tempPaths) {
+    if (!tempPath) continue;
+    const meta = await sharp(tempPath).metadata();
     doc.addPage({ size: [meta.width, meta.height] });
-    doc.image(buffer, 0, 0, { width: meta.width, height: meta.height });
+    doc.image(tempPath, 0, 0, { width: meta.width, height: meta.height });
+    fs.unlinkSync(tempPath);
   }
 
-  // Finalize PDF
+  fs.rmdirSync(tempDir, { recursive: true });
   doc.end();
   return endPromise;
 }
