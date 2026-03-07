@@ -628,16 +628,6 @@ async function getChapterImages(chapterPath) {
 }
 
 
-// ===============================
-// 📄 STREAM PDF BUILDER
-// ===============================
-// ===============================
-// 📄 STREAM PDF BUILDER (PARALLEL + PROGRESS)
-// ===============================
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
-
 async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
   const MAX_PAGES = 120;
   const urls = imageUrls.slice(0, MAX_PAGES);
@@ -647,71 +637,59 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
   doc.on("data", chunk => chunks.push(chunk));
   const endPromise = new Promise(resolve => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
-  // Temp folder for images
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "manhwa-"));
   let completed = 0;
-  const sentThumbnails = [];
 
-  // Initial progress message
-  await sock.sendMessage(from, {
-    text: `📄 Generating PDF... 0/${urls.length}`,
-    edit: thinkingKey
-  });
-
-  const fetchImage = async (url, index) => {
+  // Helper to download and process an image
+  const fetchImageBuffer = async (url) => {
     try {
       const proxiedUrl = `https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(url)}`;
-      const res = await axios.get(proxiedUrl, {
-        responseType: "arraybuffer",
-        timeout: 120000, // 2 minutes
-        maxContentLength: 50 * 1024 * 1024,
-        maxBodyLength: 50 * 1024 * 1024
-      });
-
+      const res = await axios.get(proxiedUrl, { responseType: "arraybuffer", timeout: 120000 });
       const buffer = await sharp(res.data)
         .rotate()
-        .resize(800, null, { fit: "inside", withoutEnlargement: true }) // smaller for preview
-        .jpeg({ quality: 70 })
+        .resize(1200, null, { fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 80 })
         .toBuffer();
-
-      const tempPath = path.join(tempDir, `img_${index}.jpg`);
-      fs.writeFileSync(tempPath, buffer);
-
-      // Send live thumbnail preview
-      sentThumbnails.push(buffer);
-      // Only send up to 5 images per edit to avoid large messages
-      const previewImages = sentThumbnails.slice(-5).map(buf => ({ image: buf }));
-      await sock.sendMessage(from, {
-        text: `📄 Downloaded images: ${completed + 1}/${urls.length}`,
-        edit: thinkingKey,
-        ...((previewImages.length > 0) ? { media: previewImages } : {})
-      }).catch(() => {});
-
-      return tempPath;
-
+      completed++;
+      return buffer;
     } catch (err) {
       console.log("❌ Image failed:", url, err.message);
-      return null;
-    } finally {
       completed++;
+      return null;
     }
   };
 
-  // Fetch in parallel with limit
-  const pLimit = require("p-limit");
-  const limit = pLimit(5);
-  const tempPaths = await Promise.all(urls.map((url, i) => limit(() => fetchImage(url, i))));
-
-  // Add images sequentially to PDF
-  for (const tempPath of tempPaths) {
-    if (!tempPath) continue;
-    const meta = await sharp(tempPath).metadata();
+  // =============================
+  // 1️⃣ Fetch the first image alone
+  // =============================
+  const firstBuffer = await fetchImageBuffer(urls[0]);
+  if (firstBuffer) {
+    const meta = await sharp(firstBuffer).metadata();
     doc.addPage({ size: [meta.width, meta.height] });
-    doc.image(tempPath, 0, 0, { width: meta.width, height: meta.height });
-    fs.unlinkSync(tempPath); // Delete temp image after adding
+    doc.image(firstBuffer, 0, 0, { width: meta.width, height: meta.height });
   }
 
-  fs.rmdirSync(tempDir, { recursive: true });
+  // Send progress after first image
+  await sock.sendMessage(from, {
+    text: `📄 Downloaded images: 1/${urls.length}`,
+    edit: thinkingKey
+  });
+
+  // =============================
+  // 2️⃣ Fetch remaining images in parallel
+  // =============================
+  const remainingUrls = urls.slice(1);
+  const promises = remainingUrls.map(url => fetchImageBuffer(url));
+  const buffers = await Promise.all(promises);
+
+  // Add all remaining images to PDF
+  for (const buffer of buffers) {
+    if (!buffer) continue;
+    const meta = await sharp(buffer).metadata();
+    doc.addPage({ size: [meta.width, meta.height] });
+    doc.image(buffer, 0, 0, { width: meta.width, height: meta.height });
+  }
+
+  // Finalize PDF
   doc.end();
   return endPromise;
 }
