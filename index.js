@@ -646,23 +646,29 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
 
   // 🔹 Helper to download and process one image
   const processImage = async (url, index) => {
+    const tempPath = path.join(os.tmpdir(), `img_${Date.now()}_${index}.jpg`);
     try {
-      // download and resize in memory, no temp file
+      // Download image to temp file
       const res = await axios.get(`https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(url)}`, {
         responseType: "arraybuffer",
         timeout: 120000
       });
 
-      const imageBuffer = await sharp(res.data)
+      await sharp(res.data)
         .rotate()
         .resize(1200, null, { fit: "inside", withoutEnlargement: true })
         .jpeg({ quality: 80 })
-        .toBuffer();
+        .toFile(tempPath);
 
-      const meta = await sharp(imageBuffer).metadata();
+      const meta = await sharp(tempPath).metadata();
       doc.addPage({ size: [meta.width, meta.height] });
-      doc.image(imageBuffer, 0, 0, { width: meta.width, height: meta.height });
+      doc.image(tempPath, 0, 0, { width: meta.width, height: meta.height });
 
+    } catch (err) {
+      console.error(`❌ Failed to process image ${index}:`, err.message);
+    } finally {
+      // Delete temp image immediately to free disk space
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
       completed++;
       if (completed % 5 === 0 || completed === urls.length) {
         await sock.sendMessage(from, {
@@ -670,25 +676,21 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
           edit: thinkingKey
         }).catch(() => {});
       }
-    } catch (err) {
-      completed++;
-      console.error(`❌ Failed to process image ${index}:`, err.message);
     }
   };
 
-  // 1️⃣ Process first image for preview
+  // 1️⃣ Process first image alone for immediate preview
   if (urls[0]) await processImage(urls[0], 0);
 
-  // 2️⃣ Process remaining images with limited concurrency
-  const pLimit = require("p-limit")(3); // smaller concurrency reduces memory usage
+  // 2️⃣ Process remaining images in parallel with limit
+  const limit = pLimit(3); // limit concurrency to reduce memory
   const remaining = urls.slice(1);
-  await Promise.all(remaining.map((url, i) => pLimit(() => processImage(url, i + 1))));
+  await Promise.all(remaining.map((url, i) => limit(() => processImage(url, i + 1))));
 
   doc.end();
 
   return new Promise((resolve, reject) => {
     pdfStream.on("finish", () => {
-      // read PDF file once it's done
       const buffer = fs.readFileSync(tempPDFPath);
       fs.unlinkSync(tempPDFPath);
       resolve(buffer);
