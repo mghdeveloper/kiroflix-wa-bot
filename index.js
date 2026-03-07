@@ -633,37 +633,38 @@ async function getChapterImages(chapterPath) {
 
 
 
-async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
+async function buildPDFStreamLowMemory(imageUrls, sock, from, thinkingKey) {
   const MAX_PAGES = 120;
   const urls = imageUrls.slice(0, MAX_PAGES);
 
-  const doc = new PDFDocument({ autoFirstPage: false });
   const tempPDFPath = path.join(os.tmpdir(), `manhwa_${Date.now()}.pdf`);
   const pdfStream = fs.createWriteStream(tempPDFPath);
+  const doc = new PDFDocument({ autoFirstPage: false });
+
   doc.pipe(pdfStream);
 
+  const limit = pLimit(3); // limit concurrency to reduce memory spikes
   let completed = 0;
 
-  // 🔹 Helper to download and process one image
   const processImage = async (url, index) => {
     try {
-      const tempPath = path.join(os.tmpdir(), `img_${Date.now()}_${index}.jpg`);
+      // Download image as buffer
       const res = await axios.get(`https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(url)}`, {
         responseType: "arraybuffer",
-        timeout: 120000
+        timeout: 120000,
       });
 
-      await sharp(res.data)
+      // Resize on the fly and keep minimal memory footprint
+      const imageBuffer = await sharp(res.data)
         .rotate()
         .resize(1200, null, { fit: "inside", withoutEnlargement: true })
         .jpeg({ quality: 80 })
-        .toFile(tempPath);
+        .toBuffer();
 
-      const meta = await sharp(tempPath).metadata();
-      doc.addPage({ size: [meta.width, meta.height] });
-      doc.image(tempPath, 0, 0, { width: meta.width, height: meta.height });
+      const metadata = await sharp(imageBuffer).metadata();
 
-      fs.unlinkSync(tempPath);
+      doc.addPage({ size: [metadata.width, metadata.height] });
+      doc.image(imageBuffer, 0, 0, { width: metadata.width, height: metadata.height });
 
       completed++;
       if (completed % 5 === 0 || completed === urls.length) {
@@ -679,21 +680,17 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
     }
   };
 
-  // 1️⃣ Process first image alone for immediate preview
-  if (urls[0]) await processImage(urls[0], 0);
-
-  // 2️⃣ Process remaining images in parallel with limit
-  const pLimit = require("p-limit")(5); // limit concurrency to 5
-  const remaining = urls.slice(1);
-  await Promise.all(remaining.map((url, i) => pLimit(() => processImage(url, i + 1))));
+  // Process images sequentially to minimize RAM
+  for (let i = 0; i < urls.length; i++) {
+    await limit(() => processImage(urls[i], i));
+  }
 
   doc.end();
 
   return new Promise((resolve, reject) => {
     pdfStream.on("finish", () => {
-      const buffer = fs.readFileSync(tempPDFPath);
-      fs.unlinkSync(tempPDFPath);
-      resolve(buffer);
+      const readStream = fs.createReadStream(tempPDFPath);
+      resolve(readStream); // return stream instead of buffer
     });
     pdfStream.on("error", reject);
   });
