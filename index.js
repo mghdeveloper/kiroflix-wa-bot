@@ -1239,9 +1239,10 @@ async function checkNewEpisodes(sock) {
   }
 }
 async function handleMessage(sock, msg) {
-    const quotedMsg = msg.quoted || msg;
+  const quotedMsg = msg.quoted || msg;
   const userId = msg.key.remoteJid;
   const from = userId;
+
   // ✅ Ignore status updates
   if (userId === "status@broadcast") return;
 
@@ -1257,33 +1258,31 @@ async function handleMessage(sock, msg) {
   }
 
   lastMessageTime.set(userId, now);
-// 📅 Daily limit check
-const today = new Date().toDateString();
-const userData = dailyUsage.get(userId);
 
-if (!userData || userData.date !== today) {
-  dailyUsage.set(userId, { count: 1, date: today });
-} else {
-  if (userData.count >= DAILY_LIMIT) {
-    await sock.sendMessage(from, {
-      text: "🚫 Daily limit reached.\nPlease try again tomorrow."
-    });
-    return;
+  // 📅 Daily limit check
+  const today = new Date().toDateString();
+  const userData = dailyUsage.get(userId);
+
+  if (!userData || userData.date !== today) {
+    dailyUsage.set(userId, { count: 1, date: today });
+  } else {
+    if (userData.count >= DAILY_LIMIT) {
+      await sock.sendMessage(from, {
+        text: "🚫 Daily limit reached.\nPlease try again tomorrow."
+      });
+      return;
+    }
+    userData.count++;
   }
-  userData.count++;
-}
-  
 
+  // 🔒 User lock
   if (userLocks.get(userId)) {
     console.log(`[LOCK] Skipping message from ${userId}`);
     return;
   }
-
   userLocks.set(userId, true);
 
   try {
-    const from = userId;
-
     const text =
       msg.message?.conversation ||
       msg.message?.extendedTextMessage?.text ||
@@ -1291,19 +1290,18 @@ if (!userData || userData.date !== today) {
 
     if (!text) return;
 
-    // 🧠 Send thinking message
+    // 🧠 Thinking message
     const thinkingMsg = await sock.sendMessage(from, {
-  text: "🤔 Thinking..."
-}, { quoted: quotedMsg });
+      text: "🤔 Thinking..."
+    }, { quoted: quotedMsg });
 
     const thinkingKey = thinkingMsg.key;
 
     // 🧠 Detect message type
-    // 🧠 Detect message type
     const typeResult = await detectMessageType(userId, text);
-    const type = typeResult.type;           // "anime" | "manhwa" | etc.
+    const type = typeResult.type;                     // "anime" | "manhwa" | etc.
     const resolvedText = typeResult.resolvedMessage;
-    const conversationContext = typeResult.context; // ✅ get built context
+    const conversationContext = typeResult.context;   // Built context
 
     // 🎬 ANIME
     if (type === "anime") {
@@ -1317,7 +1315,8 @@ if (!userData || userData.date !== today) {
         return;
       }
 
-      await handleAnimeRequest(intent, resolvedText, from, thinkingKey);
+      // ✅ Pass sock!
+      await handleAnimeRequest(sock, intent, resolvedText, from, thinkingKey);
       return;
     }
 
@@ -1328,21 +1327,22 @@ if (!userData || userData.date !== today) {
         edit: thinkingKey
       });
 
-      await handleManhwaRequest(resolvedText, from, sock, thinkingKey);
+      // ✅ Pass sock
+      await handleManhwaRequest(sock, resolvedText, from, thinkingKey);
       return;
     }
 
     // 💬 CASUAL / UNKNOWN → pass context to general request
-    await handleGeneralRequest(resolvedText, from, thinkingKey, conversationContext);
+    await handleGeneralRequest(sock, resolvedText, from, thinkingKey, conversationContext);
 
-} catch (err) {
-  logError("MAIN HANDLER", err);
-  await sock.sendMessage(msg.key.remoteJid, {
-    text: "⚠️ Something went wrong"
-  }, { quoted: quotedMsg });
-} finally {
-  userLocks.delete(userId);
-}
+  } catch (err) {
+    logError("MAIN HANDLER", err);
+    await sock.sendMessage(msg.key.remoteJid, {
+      text: "⚠️ Something went wrong"
+    }, { quoted: quotedMsg });
+  } finally {
+    userLocks.delete(userId);
+  }
 }
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
