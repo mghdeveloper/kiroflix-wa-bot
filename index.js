@@ -20,7 +20,8 @@ const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-
+// Keep track of episodes already processed to avoid resending
+const processedEpisodes = new Set();
 let qrCodeDataURL = null; // store latest QR code
 // Maximum message length allowed for processing
 const MAX_MESSAGE_LENGTH = 300; // or whatever limit you prefer
@@ -120,6 +121,73 @@ async function searchReference(query) {
   } catch (err) {
     console.error("❌ DuckDuckGo search failed:", err.message);
     return "";
+  }
+}
+
+async function checkNewEpisodes(sock) {
+  try {
+    console.log("⏱ Checking for new episodes...");
+
+    // 1️⃣ Fetch last released episodes
+    const { data } = await axios.get("https://creators.kiroflix.site/backend/lastep.php", { timeout: 15000 });
+
+    if (!data?.success || !data.results?.length) {
+      console.log("⚠️ No new episodes fetched");
+      return;
+    }
+
+    // 2️⃣ Filter out episodes already processed
+    const newEpisodes = data.results.filter(ep => !processedEpisodes.has(ep.episode_id));
+
+    if (!newEpisodes.length) {
+      console.log("✅ No new episodes to process");
+      return;
+    }
+
+    console.log(`📢 Found ${newEpisodes.length} new episodes`);
+
+    // 3️⃣ Generate streams for all new episodes (optional concurrency limit)
+    for (const ep of newEpisodes) {
+      try {
+        const stream = await generateStream(ep.episode_id);
+        if (stream) {
+          ep.stream = stream; // attach stream info
+        }
+      } catch (err) {
+        console.error(`❌ Failed to generate stream for ${ep.anime_title}:`, err.message);
+      }
+    }
+
+    // 4️⃣ Mark episodes as processed
+    newEpisodes.forEach(ep => processedEpisodes.add(ep.episode_id));
+
+    // 5️⃣ Fetch all unique users
+    const { data: usersData } = await axios.get("https://kiroflix.site/backend/get_unique_wa_users.php", { timeout: 15000 });
+    if (!usersData?.success) {
+      console.log("⚠️ Failed to fetch users");
+      return;
+    }
+
+    const users = usersData.data;
+
+    // 6️⃣ Send a single message to each user with all new episodes
+    for (const user of users) {
+      const from = user.user_jid;
+
+      const messageLines = newEpisodes.map(ep => {
+        const streamUrl = ep.stream?.player || "Stream not available";
+        return `🎬 ${ep.anime_title} - ${ep.episode_title}\n▶️ ${streamUrl}`;
+      });
+
+      const fullMessage = `📢 New episodes released!\n\n${messageLines.join("\n\n")}`;
+
+      await sock.sendMessage(from, { text: fullMessage }).catch(() => {});
+    }
+
+    console.log("✅ New episodes sent to users");
+
+  } catch (err) {
+    console.error("❌ Episode worker error:", err.message);
   }
 }
 // -------------------- AI --------------------
@@ -1044,7 +1112,11 @@ async function startBot() {
     auth: state,
     browser: ["Kiroflix Bot", "Chrome", "1.0"]
   });
+// Run immediately on startup
+checkNewEpisodes();
 
+// Then run every hour (3600000 ms)
+setInterval(checkNewEpisodes, 3600000);
   sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
   if (qr) {
     // Convert QR to data URL for browser
