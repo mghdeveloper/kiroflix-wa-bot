@@ -129,7 +129,7 @@ async function checkNewEpisodes(sock) {
     console.log("⏱ Checking for new episodes...");
 
     // 1️⃣ Fetch last released episodes
-    const { data } = await axios.get("https://creators.kiroflix.site/backend/lastep.php", { timeout: 120000 });
+    const { data } = await axios.get("https://kiroflix.site/backend/lastep.php", { timeout: 120000 });
 
     if (!data?.success || !data.results?.length) {
       console.log("⚠️ No new episodes fetched");
