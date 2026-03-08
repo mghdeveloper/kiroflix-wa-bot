@@ -1178,7 +1178,6 @@ async function checkNewEpisodes(sock) {
 
     // 1️⃣ Fetch last released episodes
     const { data } = await axios.get("https://kiroflix.site/backend/lastep.php", { timeout: 120000 });
-
     if (!data?.success || !data.results?.length) {
       console.log("⚠️ No new episodes fetched");
       return;
@@ -1187,29 +1186,24 @@ async function checkNewEpisodes(sock) {
     // 2️⃣ Filter out episodes already processed
     const newEpisodes = data.results.filter(ep => !processedEpisodes.has(ep.episode_id));
 
+    if (!processedEpisodes.size) {
+      // First run: store all episodes without sending
+      data.results.forEach(ep => processedEpisodes.add(ep.episode_id));
+      console.log(`ℹ️ First run: stored ${data.results.length} episodes. No messages sent.`);
+      return;
+    }
+
     if (!newEpisodes.length) {
-      console.log("✅ No new episodes to process");
+      console.log("✅ No new episodes to send");
       return;
     }
 
     console.log(`📢 Found ${newEpisodes.length} new episodes`);
 
-    // 3️⃣ Generate streams for all new episodes (optional concurrency limit)
-    for (const ep of newEpisodes) {
-      try {
-        const stream = await generateStream(ep.episode_id);
-        if (stream) {
-          ep.stream = stream; // attach stream info
-        }
-      } catch (err) {
-        console.error(`❌ Failed to generate stream for ${ep.anime_title}:`, err.message);
-      }
-    }
-
-    // 4️⃣ Mark episodes as processed
+    // 3️⃣ Mark new episodes as processed
     newEpisodes.forEach(ep => processedEpisodes.add(ep.episode_id));
 
-    // 5️⃣ Fetch all unique users
+    // 4️⃣ Fetch all unique users
     const { data: usersData } = await axios.get("https://kiroflix.site/backend/get_unique_wa_users.php", { timeout: 15000 });
     if (!usersData?.success) {
       console.log("⚠️ Failed to fetch users");
@@ -1218,18 +1212,28 @@ async function checkNewEpisodes(sock) {
 
     const users = usersData.data;
 
-    // 6️⃣ Send a single message to each user with all new episodes
+    // 5️⃣ Prepare the message lines
+    const messageLines = newEpisodes.map(ep => `🎬 ${ep.anime_title} - ${ep.episode_title}\n▶️ Stream not available`);
+
+    // 6️⃣ Pick poster of the last episode in the list that has a poster
+    const lastPosterEpisode = [...newEpisodes].reverse().find(ep => ep.poster1);
+    const lastPoster = lastPosterEpisode?.poster1 || null;
+
+    // 7️⃣ Send messages to all users
     for (const user of users) {
       const from = user.user_jid;
+      const fullMessage = messageLines.join("\n\n");
 
-      const messageLines = newEpisodes.map(ep => {
-        const streamUrl = ep.stream?.player || "Stream not available";
-        return `🎬 ${ep.anime_title} - ${ep.episode_title}\n▶️ ${streamUrl}`;
-      });
-
-      const fullMessage = `📢 New episodes released!\n\n${messageLines.join("\n\n")}`;
-
-      await sock.sendMessage(from, { text: fullMessage }).catch(() => {});
+      if (lastPoster) {
+        await sock.sendMessage(from, {
+          image: { url: lastPoster },
+          caption: `📢 New episodes released!\n\n${fullMessage}`
+        }).catch(() => {});
+      } else {
+        await sock.sendMessage(from, {
+          text: `📢 New episodes released!\n\n${fullMessage}`
+        }).catch(() => {});
+      }
     }
 
     console.log("✅ New episodes sent to users");
