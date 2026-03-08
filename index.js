@@ -124,76 +124,7 @@ async function searchReference(query) {
   }
 }
 
-async function checkNewEpisodes(sock) {
-  try {
-    console.log("⏱ Checking for new episodes...");
 
-    // 1️⃣ Fetch last released episodes
-    const { data } = await axios.get("https://kiroflix.site/backend/lastep.php", { timeout: 120000 });
-
-    if (!data?.success || !data.results?.length) {
-      console.log("⚠️ No new episodes fetched");
-      return;
-    }
-
-    // 2️⃣ Filter out episodes already processed
-    const newEpisodes = data.results.filter(ep => !processedEpisodes.has(ep.episode_id));
-
-    if (!newEpisodes.length) {
-      console.log("✅ No new episodes to process");
-      return;
-    }
-
-    console.log(`📢 Found ${newEpisodes.length} new episodes`);
-
-    // 3️⃣ Generate streams for all new episodes (with retries)
-    for (const ep of newEpisodes) {
-      try {
-        ep.stream = await generateStreamWithRetries(ep.episode_id); // retry wrapper to avoid API spam
-      } catch (err) {
-        console.error(`❌ Failed to generate stream for ${ep.anime_title}:`, err.message);
-        ep.stream = { player: "Stream not available" }; // fallback
-      }
-    }
-
-    // 4️⃣ Mark episodes as processed
-    newEpisodes.forEach(ep => processedEpisodes.add(ep.episode_id));
-
-    // 5️⃣ Fetch all unique users
-    const { data: usersData } = await axios.get("https://kiroflix.site/backend/get_unique_wa_users.php", { timeout: 15000 });
-    if (!usersData?.success) {
-      console.log("⚠️ Failed to fetch users");
-      return;
-    }
-
-    const users = usersData.data;
-
-    // 6️⃣ Send a single message to each user with all new episodes
-    for (const user of users) {
-      const from = user.user_jid;
-
-      if (!from) continue; // skip invalid users
-
-      const messageLines = newEpisodes.map(ep => {
-        const streamUrl = ep.stream?.player || "Stream not available";
-        return `🎬 ${ep.anime_title} - ${ep.episode_title}\n▶️ ${streamUrl}`;
-      });
-
-      const fullMessage = `📢 New episodes released!\n\n${messageLines.join("\n\n")}`;
-
-      try {
-        await sock.sendMessage(from, { text: fullMessage });
-      } catch (err) {
-        console.warn(`⚠️ Failed to send message to ${from}:`, err.message);
-      }
-    }
-
-    console.log("✅ New episodes sent to all users");
-
-  } catch (err) {
-    console.error("❌ Episode worker error:", err.message);
-  }
-}
 // -------------------- AI --------------------
 async function askAI(prompt) {
   try {
@@ -1105,41 +1036,7 @@ async function generateSubtitle(chatId, episodeId, lang = "English", sock) {
     return null;
   }
 }
-
-async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState("auth");
-  const { version } = await fetchLatestBaileysVersion();
-
-  const sock = makeWASocket({
-    version,
-    logger: P({ level: "silent" }),
-    auth: state,
-    browser: ["Kiroflix Bot", "Chrome", "1.0"]
-  });
-
-  sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
-  if (qr) {
-    // Convert QR to data URL for browser
-    qrCodeDataURL = await qrcode.toDataURL(qr);
-    console.log("📲 QR code updated. Scan from your browser!");
-  }
-
-  if (connection === "open") {
-    console.log("✅ WhatsApp connected");
-    qrCodeDataURL = null; // clear QR after login
-  }
-// Run immediately on startup
-checkNewEpisodes();
-
-// Then run every hour (3600000 ms)
-setInterval(checkNewEpisodes, 3600000);
-  if (connection === "close") {
-    const shouldReconnect =
-      lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-    if (shouldReconnect) startBot();
-  }
-});
-  async function handleAnimeRequest(intent, originalText, from, thinkingKey) {
+async function handleAnimeRequest(sock, intent, originalText, from, thinkingKey) {
   try {
     // 🔄 Update thinking message
     await sock.sendMessage(from, {
@@ -1240,7 +1137,7 @@ Here is the latest available 👇
     });
   }
 }
-  async function handleGeneralRequest(text, from, thinkingKey, context) {
+async function handleGeneralRequest(sock, text, from, thinkingKey, context) {
   try {
     // Use the passed context; if missing, fallback to building it
     const convContext = context || await buildContext(from, text);
@@ -1275,7 +1172,73 @@ Here is the latest available 👇
     });
   }
 }
-  async function handleMessage(msg) {
+async function checkNewEpisodes(sock) {
+  try {
+    console.log("⏱ Checking for new episodes...");
+
+    // 1️⃣ Fetch last released episodes
+    const { data } = await axios.get("https://kiroflix.site/backend/lastep.php", { timeout: 120000 });
+
+    if (!data?.success || !data.results?.length) {
+      console.log("⚠️ No new episodes fetched");
+      return;
+    }
+
+    // 2️⃣ Filter out episodes already processed
+    const newEpisodes = data.results.filter(ep => !processedEpisodes.has(ep.episode_id));
+
+    if (!newEpisodes.length) {
+      console.log("✅ No new episodes to process");
+      return;
+    }
+
+    console.log(`📢 Found ${newEpisodes.length} new episodes`);
+
+    // 3️⃣ Generate streams for all new episodes (optional concurrency limit)
+    for (const ep of newEpisodes) {
+      try {
+        const stream = await generateStream(ep.episode_id);
+        if (stream) {
+          ep.stream = stream; // attach stream info
+        }
+      } catch (err) {
+        console.error(`❌ Failed to generate stream for ${ep.anime_title}:`, err.message);
+      }
+    }
+
+    // 4️⃣ Mark episodes as processed
+    newEpisodes.forEach(ep => processedEpisodes.add(ep.episode_id));
+
+    // 5️⃣ Fetch all unique users
+    const { data: usersData } = await axios.get("https://kiroflix.site/backend/get_unique_wa_users.php", { timeout: 15000 });
+    if (!usersData?.success) {
+      console.log("⚠️ Failed to fetch users");
+      return;
+    }
+
+    const users = usersData.data;
+
+    // 6️⃣ Send a single message to each user with all new episodes
+    for (const user of users) {
+      const from = user.user_jid;
+
+      const messageLines = newEpisodes.map(ep => {
+        const streamUrl = ep.stream?.player || "Stream not available";
+        return `🎬 ${ep.anime_title} - ${ep.episode_title}\n▶️ ${streamUrl}`;
+      });
+
+      const fullMessage = `📢 New episodes released!\n\n${messageLines.join("\n\n")}`;
+
+      await sock.sendMessage(from, { text: fullMessage }).catch(() => {});
+    }
+
+    console.log("✅ New episodes sent to users");
+
+  } catch (err) {
+    console.error("❌ Episode worker error:", err.message);
+  }
+}
+async function handleMessage(sock, msg) {
     const quotedMsg = msg.quoted || msg;
   const userId = msg.key.remoteJid;
   const from = userId;
@@ -1381,72 +1344,91 @@ if (!userData || userData.date !== today) {
   userLocks.delete(userId);
 }
 }
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState("auth");
+  const { version } = await fetchLatestBaileysVersion();
+
+  const sock = makeWASocket({
+    version,
+    logger: P({ level: "silent" }),
+    auth: state,
+    browser: ["Kiroflix Bot", "Chrome", "1.0"]
+  });
+
+  // 🟢 Connection events
+  sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
+    if (qr) {
+      qrCodeDataURL = await qrcode.toDataURL(qr);
+      console.log("📲 QR code updated. Scan from your browser!");
+    }
+
+    if (connection === "open") {
+      console.log("✅ WhatsApp connected");
+      qrCodeDataURL = null; // clear QR
+      // Run immediately on startup
+      await checkNewEpisodes(sock);
+      // Then run every hour
+      setInterval(() => checkNewEpisodes(sock), 3600000);
+    }
+
+    if (connection === "close") {
+      const shouldReconnect =
+        lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      if (shouldReconnect) startBot();
+    }
+  });
+
   sock.ev.on("creds.update", saveCreds);
 
-  // 📩 MAIN MESSAGE HANDLER
-const COMMANDS = ["/kiroflix"]; // commands you want to detect
+  // 📨 Message listener
+  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    if (type !== "notify") return;
+    const msg = messages[0];
+    if (!msg.message || msg.key.fromMe) return;
 
-sock.ev.on("messages.upsert", async ({ messages, type }) => {
-  if (type !== "notify") return; // ✅ ignore duplicates
+    const from = msg.key.remoteJid;
+    const isGroup = from.endsWith("@g.us");
 
-  const msg = messages[0];
-  if (!msg.message) return;
-  if (msg.key.fromMe) return;
+    // 📝 Extract text
+    let text =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text ||
+      msg.message.imageMessage?.caption ||
+      msg.message.videoMessage?.caption ||
+      "";
+    if (!text) return;
+    text = text.trim();
 
-  const from = msg.key.remoteJid;
-  const isGroup = from.endsWith("@g.us");
+    // ✅ Group commands
+    if (isGroup) {
+      if (!text.toLowerCase().startsWith("/kiroflix")) return;
+      text = text.replace(/^\/kiroflix/i, "").trim();
+      if (text.length > MAX_MESSAGE_LENGTH) {
+        await sock.sendMessage(from, {
+          text: "⚠️ Request too long.\nExample:\n/kiroflix Naruto episode 5"
+        });
+        return;
+      }
+    } else {
+      // ✅ Private chat max length
+      if (text.length > MAX_MESSAGE_LENGTH) {
+        await sock.sendMessage(from, {
+          text: "⚠️ Message too long.\nPlease send a shorter request (max 300 characters).\n\nExample:\nNaruto episode 5\nSolo Leveling chapter 120"
+        });
+        return;
+      }
+    }
 
-  // 📝 Extract text safely
-  let text =
-    msg.message.conversation ||
-    msg.message.extendedTextMessage?.text ||
-    msg.message.imageMessage?.caption ||
-    msg.message.videoMessage?.caption ||
-    "";
-
-  if (!text) return;
-
-text = text.trim();
-
-// ✅ GROUP LOGIC
-if (isGroup) {
-
-  // Only respond to /stream commands in groups
-  if (!text.toLowerCase().startsWith("/kiroflix")) return;
-
-  // Remove "/kiroflix"
-  text = text.replace(/^\/kiroflix/i, "").trim();
-
-  // 🔒 Length check ONLY for command usage in groups
-  if (text.length > MAX_MESSAGE_LENGTH) {
-    await sock.sendMessage(from, {
-      text: "⚠️ Request too long.\nExample:\n/kiroflix Naruto episode 5"
+    // ✅ Handle the message
+    await handleMessage(sock, {
+      ...msg,
+      key: { ...msg.key, remoteJid: from },
+      message: { conversation: text },
+      quoted: msg
     });
-    return;
-  }
+  });
 
-} else {
-  // 🔒 Private chat → always check length
-  if (text.length > MAX_MESSAGE_LENGTH) {
-    await sock.sendMessage(from, {
-      text: "⚠️ Message too long.\nPlease send a shorter request (max 300 characters).\n\nExample:\nNaruto episode 5\nSolo Leveling chapter 120"
-    });
-    return;
-  }
-}
-
-  
-
-  // ✅ PRIVATE CHAT
-  // In private, allow everything (no command needed)
-
-  await handleMessage({
-  ...msg,
-  key: { ...msg.key, remoteJid: from },
-  message: { conversation: text },
-  quoted: msg // 👈 attach original message
-});
-});
+  console.log("🤖 Kiroflix Bot is running...");
 }
 
 startBot();
