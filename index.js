@@ -67,7 +67,7 @@ function logError(context, err) {
   console.error(`\n❌ ERROR in ${context}`);
   console.error(err.message);
 }
-async function buildContext(userJid, currentText) {
+async function buildContext(userJid, currentText, maxRecent = 5) {
   try {
     const { data } = await axios.post(
       "https://kiroflix.site/backend/get_last_messages.php",
@@ -75,18 +75,23 @@ async function buildContext(userJid, currentText) {
     );
 
     const messages = data.success ? data.messages : [];
+
+    // Take only the most recent `maxRecent` messages
+    const recentMessages = messages.slice(-maxRecent);
+
     let context = "";
 
-    for (const msg of messages) {
+    for (const msg of recentMessages) {
       context += `User: ${msg.user_message}\nAI: ${msg.ai_reply}\n\n`;
     }
 
+    // Add current message at the end for AI to process
     context += `User: ${currentText}\nAI:`;
 
-    // ✅ LOG THE SIDE CONTEXT
-    console.log("===== SIDE CONTEXT =====");
+    // ✅ LOG CONTEXT FOR DEBUGGING
+    console.log("===== RECENT CONTEXT =====");
     console.log(context);
-    console.log("========================");
+    console.log("==========================");
 
     return context;
 
@@ -95,6 +100,7 @@ async function buildContext(userJid, currentText) {
     return `User: ${currentText}\nAI:`;
   }
 }
+
 async function searchReference(query) {
   try {
     const { data } = await axios.get(
@@ -816,28 +822,30 @@ ${(manhwa.synopsis || "").substring(0, 250)}...`;
 
   }
 }
+// ===============================
+// 🚀 Detect message type with stronger rules
+// ===============================
 async function detectMessageType(userJid, currentText) {
   try {
-    // 1️⃣ Build full context including the current message
+    // Build context focusing on last few messages
     const context = await buildContext(userJid, currentText);
 
-    // 2️⃣ Ask AI to resolve references and classify type
     const prompt = `
-You classify messages for an Anime & Manhwa bot.
+You are a smart classification AI for an Anime & Manhwa bot.
 
-TASKS
+TASKS:
 1️⃣ Classify the user's message into ONE type:
-"anime" | "manhwa" | "casual" | "unknown"
+"anime" | "manhwa" | "casual" | "wallpaper" | "unknown"
 
-2️⃣ Resolve references using conversation context
-(example: "next episode" → "One Piece episode 401").
+2️⃣ Resolve references using conversation context. 
+- Prioritize recent messages. Use older messages only as reference if necessary. 
 
 3️⃣ Extract a short topic summary from recent messages.
 
-STRICT CLASSIFICATION RULES
+STRICT CLASSIFICATION RULES:
 
 ✅ "anime"
-ONLY if the user CLEARLY wants to WATCH an episode NOW.
+User wants to WATCH an episode NOW.
 Examples:
 - "send episode 5 of One Piece"
 - "watch naruto episode 20"
@@ -845,59 +853,49 @@ Examples:
 - "next episode"
 
 ✅ "manhwa"
-ONLY if the user CLEARLY wants to READ a chapter NOW.
+User wants to READ a chapter NOW.
 Examples:
 - "solo leveling chapter 20"
 - "read chapter 45"
 - "send next chapter"
 
-❌ DO NOT classify as anime/manhwa if the user is:
-- asking for recommendations
-- asking for explanations
-- asking about story or characters
-- asking what anime is good
-- asking for reviews
-- asking for info about an anime
-- general discussion
--manga not supported only manhwa
-
-These MUST be classified as "casual".
-
+✅ "wallpaper"
+User wants an anime wallpaper image.
 Examples:
-"recommend anime" → casual  
-"what is solo leveling about" → casual  
-"best romance anime" → casual  
-"is one piece good" → casual  
+- "send me a Naruto wallpaper"
+- "I want a Luffy desktop wallpaper"
+- "wallpaper of Attack on Titan characters"
 
-If the message intent is unclear → "unknown".
+❌ "casual"
+User is asking for info, recommendations, reviews, explanations, or discussing anime/manhwa in general.
 
-CONTEXT:
+If the intent is unclear → "unknown".
+
+CONTEXT (prioritize recent messages):
 ${context}
 
 Return ONLY JSON:
 
 {
-"type":"anime|manhwa|casual|unknown",
+"type":"anime|manhwa|casual|wallpaper|unknown",
 "resolvedMessage":"resolved message",
-"topicContext":"short topic like 'One Piece episode 400' or 'Solo Leveling chapter 20' or null"
+"topicContext":"short topic like 'One Piece episode 400' or 'Solo Leveling chapter 20' or 'Naruto wallpaper' or null"
 }
 
 User message:
 "${currentText}"
 `;
 
-
     let res = await askAI(prompt);
     res = res.replace(/```json|```/gi, "").trim();
+
     const json = res.match(/\{[\s\S]*\}/)?.[0];
-    if (!json) throw new Error("No JSON");
+    if (!json) throw new Error("No JSON returned by AI");
 
     const parsed = JSON.parse(json);
 
-    // 3️⃣ If resolvedMessage is empty, fallback to currentText
     if (!parsed.resolvedMessage) parsed.resolvedMessage = currentText;
 
-    // 4️⃣ Return parsed info along with the built context
     return {
       ...parsed,
       context
@@ -1243,6 +1241,65 @@ async function checkNewEpisodes(sock) {
     console.error("❌ Episode worker error:", err.message);
   }
 }
+async function handleWallpaperRequest(sock, query, from, thinkingKey) {
+  try {
+
+    // clean query
+    const search = query
+      .toLowerCase()
+      .replace(/wallpaper|background|4k|8k/gi, "")
+      .trim()
+      .replace(/\s+/g, "-");
+
+    const url = `https://kiroflix.site/backend/get_wallpaper.php?q=${encodeURIComponent(search)}`;
+
+    const { data } = await axios.get(url);
+
+    if (!data.success || !data.results?.length) {
+      await sock.sendMessage(from, {
+        text: "❌ No wallpapers found.",
+        edit: thinkingKey
+      });
+      return;
+    }
+
+    const results = data.results;
+
+    // pick 4 random wallpapers
+    const shuffled = results.sort(() => 0.5 - Math.random());
+    const selected = shuffled.slice(0, 4);
+
+    await sock.sendMessage(from, {
+      text: `🖼️ Sending wallpapers for *${query}*`,
+      edit: thinkingKey
+    });
+
+    for (const wp of selected) {
+
+      // extract slug from page
+      const slug = wp.page
+        .split("/")
+        .pop()
+        .replace(".html", "");
+
+      const imageUrl = `https://4kwallpapers.com/images/wallpapers/${slug}.jpg`;
+
+      await sock.sendMessage(from, {
+        image: { url: imageUrl },
+        caption: `✨ ${wp.title}\n\n🔗 ${wp.page}`
+      });
+
+    }
+
+  } catch (err) {
+    logError("WALLPAPER_HANDLER", err);
+
+    await sock.sendMessage(from, {
+      text: "❌ Failed to load wallpapers.",
+      edit: thinkingKey
+    });
+  }
+}
 async function handleMessage(sock, msg) {
   const quotedMsg = msg.quoted || msg;
   const userId = msg.key.remoteJid;
@@ -1336,6 +1393,18 @@ async function handleMessage(sock, msg) {
       await handleManhwaRequest(sock, resolvedText, from, thinkingKey);
       return;
     }
+
+    // 🖼️ WALLPAPER
+if (type === "wallpaper") {
+
+  await sock.sendMessage(from, {
+    text: "🖼️ Finding wallpapers...",
+    edit: thinkingKey
+  });
+
+  await handleWallpaperRequest(sock, resolvedText, from, thinkingKey);
+  return;
+}
 
     // 💬 CASUAL / UNKNOWN → pass context to general request
     await handleGeneralRequest(sock, resolvedText, from, thinkingKey, conversationContext);
