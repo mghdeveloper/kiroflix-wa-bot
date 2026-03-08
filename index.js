@@ -146,15 +146,13 @@ async function checkNewEpisodes(sock) {
 
     console.log(`📢 Found ${newEpisodes.length} new episodes`);
 
-    // 3️⃣ Generate streams for all new episodes (optional concurrency limit)
+    // 3️⃣ Generate streams for all new episodes (with retries)
     for (const ep of newEpisodes) {
       try {
-        const stream = await generateStream(ep.episode_id);
-        if (stream) {
-          ep.stream = stream; // attach stream info
-        }
+        ep.stream = await generateStreamWithRetries(ep.episode_id); // retry wrapper to avoid API spam
       } catch (err) {
         console.error(`❌ Failed to generate stream for ${ep.anime_title}:`, err.message);
+        ep.stream = { player: "Stream not available" }; // fallback
       }
     }
 
@@ -174,6 +172,8 @@ async function checkNewEpisodes(sock) {
     for (const user of users) {
       const from = user.user_jid;
 
+      if (!from) continue; // skip invalid users
+
       const messageLines = newEpisodes.map(ep => {
         const streamUrl = ep.stream?.player || "Stream not available";
         return `🎬 ${ep.anime_title} - ${ep.episode_title}\n▶️ ${streamUrl}`;
@@ -181,10 +181,14 @@ async function checkNewEpisodes(sock) {
 
       const fullMessage = `📢 New episodes released!\n\n${messageLines.join("\n\n")}`;
 
-      await sock.sendMessage(from, { text: fullMessage }).catch(() => {});
+      try {
+        await sock.sendMessage(from, { text: fullMessage });
+      } catch (err) {
+        console.warn(`⚠️ Failed to send message to ${from}:`, err.message);
+      }
     }
 
-    console.log("✅ New episodes sent to users");
+    console.log("✅ New episodes sent to all users");
 
   } catch (err) {
     console.error("❌ Episode worker error:", err.message);
@@ -1112,11 +1116,7 @@ async function startBot() {
     auth: state,
     browser: ["Kiroflix Bot", "Chrome", "1.0"]
   });
-// Run immediately on startup
-checkNewEpisodes();
 
-// Then run every hour (3600000 ms)
-setInterval(checkNewEpisodes, 3600000);
   sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
   if (qr) {
     // Convert QR to data URL for browser
@@ -1128,7 +1128,11 @@ setInterval(checkNewEpisodes, 3600000);
     console.log("✅ WhatsApp connected");
     qrCodeDataURL = null; // clear QR after login
   }
+// Run immediately on startup
+checkNewEpisodes();
 
+// Then run every hour (3600000 ms)
+setInterval(checkNewEpisodes, 3600000);
   if (connection === "close") {
     const shouldReconnect =
       lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
