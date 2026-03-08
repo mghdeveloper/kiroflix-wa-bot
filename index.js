@@ -1468,13 +1468,28 @@ if (type === "wallpaper") {
     userLocks.delete(userId);
   }
 }
+async function updateCommandStatus(groupId, adminId, command, action) {
+  if (!["on", "off"].includes(action)) throw new Error("Action must be 'on' or 'off'");
+  try {
+    const url = `https://kiroflix.site/backend/command_update.php`; // single PHP file
+    const response = await axios.post(url, {
+      group_id: groupId,
+      admin_id: adminId,
+      command: command,
+      action: action
+    });
+    return response.data;
+  } catch (err) {
+    console.error(`❌ Failed to update command '${command}':`, err.message);
+    return { status: "error", message: err.message };
+  }
+}
 // -------------------- GROUP MENU LOGIC --------------------
 const groupCommands = {
-  games: "🎮 Activate group games or puzzles after inactivity",
+  games: "🎮 Activate or deactivate group games (use: .games on/off)",
   leaderboard: "🏆 Show group game leaderboard",
   rules: "📜 Show group rules or info"
 };
-
 async function sendGroupMenu(sock, from, sender) {
   try {
     // fetch group metadata
@@ -1499,6 +1514,41 @@ async function sendGroupMenu(sock, from, sender) {
     });
   } catch (err) {
     console.error("❌ Failed to send group menu:", err.message);
+  }
+}
+// -------------------- GLOBAL TOGGLE HANDLER --------------------
+async function handleGroupToggle(sock, from, sender, text) {
+  try {
+    // fetch group metadata
+    const metadata = await sock.groupMetadata(from);
+    const adminIds = metadata.participants
+      .filter(p => p.admin === "admin" || p.admin === "superadmin")
+      .map(p => p.id);
+
+    if (!adminIds.includes(sender)) {
+      await sock.sendMessage(from, { text: "⚠️ Only group admins can use this command." });
+      return;
+    }
+
+    // Example: ".games on" or ".games off"
+    const match = text.match(/^\.([a-zA-Z0-9_-]+)\s+(on|off)$/i);
+    if (!match) return false; // Not a toggle command
+
+    const [, command, actionRaw] = match;
+    const action = actionRaw.toLowerCase();
+
+    // ✅ Call global PHP update
+    const result = await updateCommandStatus(from, sender, command, action);
+
+    await sock.sendMessage(from, {
+      text: `🎯 Command '${command}' has been set to *${action}*.\nResponse: ${result.message}`
+    });
+
+    return true; // handled
+  } catch (err) {
+    console.error("❌ Failed to handle toggle:", err.message);
+    await sock.sendMessage(from, { text: `⚠️ Error updating command: ${err.message}` });
+    return true; // considered handled
   }
 }
 async function startBot() {
@@ -1556,9 +1606,17 @@ async function startBot() {
     if (!text) return;
     text = text.trim();
     // ✅ Group menu command restricted to admins
-if (isGroup && text === ".menu") {
-  await sendGroupMenu(sock, from, msg.key.participant || from);
-  return;
+// -------------------- MESSAGE HANDLER --------------------
+if (isGroup) {
+  // 1️⃣ Menu
+  if (text === ".menu") {
+    await sendGroupMenu(sock, from, msg.key.participant || from);
+    return;
+  }
+
+  // 2️⃣ Toggle commands like ".games on/off"
+  const handled = await handleGroupToggle(sock, from, msg.key.participant || from, text);
+  if (handled) return;
 }
 
     // ✅ Group commands
