@@ -187,6 +187,7 @@ Rules:
 - Never invent or replace the anime title.
 - Only correct typos if confirmed by search results.
 - If the user describes an episode, infer the correct episode number if possible.
+-Subtitle lang always most be full word like English not en 
 
 Movie rule:
 - season=null
@@ -709,7 +710,7 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
 // ===============================
 // 🚀 MAIN MANHWA HANDLER (V2)
 // ===============================
-async function handleManhwaRequest(text, from, sock, thinkingKey) {
+async function handleManhwaRequest(sock, text, from, thinkingKey) {
 
   try {
 
