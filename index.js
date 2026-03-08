@@ -827,58 +827,100 @@ ${(manhwa.synopsis || "").substring(0, 250)}...`;
 // ===============================
 async function detectMessageType(userJid, currentText) {
   try {
-    // Build context focusing on last few messages
+
     const context = await buildContext(userJid, currentText);
 
     const prompt = `
-You are a smart classification AI for an Anime & Manhwa bot.
+You are an intelligent classifier for an Anime & Manhwa bot.
 
-TASKS:
-1️⃣ Classify the user's message into ONE type:
-"anime" | "manhwa" | "casual" | "wallpaper" | "unknown"
+IMPORTANT FIRST STEP:
+Fix spelling mistakes and normalize the user's message.
 
-2️⃣ Resolve references using conversation context. 
-- Prioritize recent messages. Use older messages only as reference if necessary. 
-
-3️⃣ Extract a short topic summary from recent messages.
-
-STRICT CLASSIFICATION RULES:
-
-✅ "anime"
-User wants to WATCH an episode NOW.
 Examples:
-- "send episode 5 of One Piece"
-- "watch naruto episode 20"
-- "give me attack on titan episode 1"
-- "next episode"
+"attak on titen walpaper" → "attack on titan wallpaper"
+"narut ep 5" → "naruto episode 5"
+"solo levling chpter 20" → "solo leveling chapter 20"
 
-✅ "manhwa"
-User wants to READ a chapter NOW.
+The corrected sentence must be natural English.
+
+---
+
+TASKS
+
+1️⃣ Correct the spelling of the user message.
+
+2️⃣ Resolve references using the conversation context.
 Examples:
-- "solo leveling chapter 20"
-- "read chapter 45"
-- "send next chapter"
+"next episode" → "One Piece episode 401"
+"send next chapter" → "Solo Leveling chapter 45"
 
-✅ "wallpaper"
-User wants an anime wallpaper image.
+Recent messages are more important than older ones.
+
+3️⃣ Classify the corrected message into ONE type:
+
+"anime"
+"manhwa"
+"wallpaper"
+"casual"
+"unknown"
+
+---
+
+STRICT RULES
+
+✅ anime  
+User clearly wants to WATCH an episode.
+
 Examples:
-- "send me a Naruto wallpaper"
-- "I want a Luffy desktop wallpaper"
-- "wallpaper of Attack on Titan characters"
+watch naruto episode 5  
+send one piece episode 400  
+next episode  
 
-❌ "casual"
-User is asking for info, recommendations, reviews, explanations, or discussing anime/manhwa in general.
+---
+
+✅ manhwa  
+User clearly wants to READ a chapter.
+
+Examples:
+solo leveling chapter 20  
+read chapter 45  
+
+---
+
+✅ wallpaper  
+User wants anime wallpapers.
+
+Examples:
+naruto wallpaper  
+attack on titan 4k wallpaper  
+gojo background  
+
+---
+
+❌ casual  
+User asks for recommendations, explanations, reviews, discussion.
+
+Examples:
+recommend anime  
+is one piece good  
+best romance anime  
+
+---
 
 If the intent is unclear → "unknown".
 
-CONTEXT (prioritize recent messages):
+---
+
+CONTEXT (recent messages are most important):
 ${context}
+
+---
 
 Return ONLY JSON:
 
 {
-"type":"anime|manhwa|casual|wallpaper|unknown",
-"resolvedMessage":"resolved message",
+"type":"anime|manhwa|wallpaper|casual|unknown",
+"resolvedMessage":"corrected and resolved user message",
 "topicContext":"short topic like 'One Piece episode 400' or 'Solo Leveling chapter 20' or 'Naruto wallpaper' or null"
 }
 
@@ -887,14 +929,17 @@ User message:
 `;
 
     let res = await askAI(prompt);
+
     res = res.replace(/```json|```/gi, "").trim();
 
     const json = res.match(/\{[\s\S]*\}/)?.[0];
-    if (!json) throw new Error("No JSON returned by AI");
+    if (!json) throw new Error("No JSON returned");
 
     const parsed = JSON.parse(json);
 
-    if (!parsed.resolvedMessage) parsed.resolvedMessage = currentText;
+    if (!parsed.resolvedMessage) {
+      parsed.resolvedMessage = currentText;
+    }
 
     return {
       ...parsed,
@@ -903,7 +948,12 @@ User message:
 
   } catch (err) {
     logError("MESSAGE TYPE", err);
-    return { type: "unknown", resolvedMessage: currentText, context: currentText };
+
+    return {
+      type: "unknown",
+      resolvedMessage: currentText,
+      context: currentText
+    };
   }
 }
 async function logWAUsage({
