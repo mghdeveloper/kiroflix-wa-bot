@@ -1468,6 +1468,39 @@ if (type === "wallpaper") {
     userLocks.delete(userId);
   }
 }
+// -------------------- GROUP MENU LOGIC --------------------
+const groupCommands = {
+  games: "🎮 Activate group games or puzzles after inactivity",
+  leaderboard: "🏆 Show group game leaderboard",
+  rules: "📜 Show group rules or info"
+};
+
+async function sendGroupMenu(sock, from, sender) {
+  try {
+    // fetch group metadata
+    const metadata = await sock.groupMetadata(from);
+    const adminIds = metadata.participants
+      .filter(p => p.admin === "admin" || p.admin === "superadmin")
+      .map(p => p.id);
+
+    if (!adminIds.includes(sender)) {
+      await sock.sendMessage(from, {
+        text: "⚠️ Only group admins can use this command."
+      });
+      return;
+    }
+
+    const menuText = Object.entries(groupCommands)
+      .map(([cmd, desc]) => `• ${cmd} → ${desc}`)
+      .join("\n");
+
+    await sock.sendMessage(from, {
+      text: `📋 *Group Commands Menu:*\n\n${menuText}`
+    });
+  } catch (err) {
+    console.error("❌ Failed to send group menu:", err.message);
+  }
+}
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
@@ -1522,6 +1555,11 @@ async function startBot() {
       "";
     if (!text) return;
     text = text.trim();
+    // ✅ Group menu command restricted to admins
+if (isGroup && text === ".menu") {
+  await sendGroupMenu(sock, from, msg.key.participant || from);
+  return;
+}
 
     // ✅ Group commands
     if (isGroup) {
