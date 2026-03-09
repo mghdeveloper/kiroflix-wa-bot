@@ -888,12 +888,13 @@ read chapter 45
 ---
 
 ✅ wallpaper  
-User wants anime wallpapers.
+User wants anime wallpapers. clean the user message form extra ext and keep only direct queries 
 
 Examples:
-naruto wallpaper  
-attack on titan 4k wallpaper  
-gojo background  
+naruto wallpaper  -> naruto
+attack on titan 4k wallpaper  -> attack on titan
+gojo background  -> gojo
+
 
 ---
 
