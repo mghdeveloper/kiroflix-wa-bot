@@ -1523,10 +1523,7 @@ async function handleGroupToggle(sock, from, sender, text) {
       .filter(p => p.admin === "admin" || p.admin === "superadmin")
       .map(p => p.id);
 
-    if (!adminIds.includes(sender)) {
-      await sock.sendMessage(from, { text: "⚠️ Only group admins can use this command." });
-      return;
-    }
+    
 
     // Example: ".games on" or ".games off"
     const match = text.match(/^\.([a-zA-Z0-9_-]+)\s+(on|off)$/i);
