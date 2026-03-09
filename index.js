@@ -1337,7 +1337,7 @@ async function handleWallpaperRequest(sock, query, from, thinkingKey) {
 
       await sock.sendMessage(from, {
         image: { url: imageUrl },
-        caption: `✨ ${wp.title}\n\n🔗 ${wp.page}`
+        caption: `✨ ${wp.title}`
       });
 
     }
