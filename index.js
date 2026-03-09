@@ -1500,9 +1500,6 @@ async function sendGroupMenu(sock, from, sender) {
       .map(p => p.id);
 
     if (!adminIds.includes(sender)) {
-      await sock.sendMessage(from, {
-        text: "⚠️ Only group admins can use this command."
-      });
       return;
     }
 
