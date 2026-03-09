@@ -1469,81 +1469,130 @@ if (type === "wallpaper") {
     userLocks.delete(userId);
   }
 }
+// -------------------- UPDATE COMMAND STATUS --------------------
 async function updateCommandStatus(groupId, adminId, command, action) {
-  if (!["on", "off"].includes(action)) throw new Error("Action must be 'on' or 'off'");
+  if (!["on", "off"].includes(action)) {
+    throw new Error("Action must be 'on' or 'off'");
+  }
+
   try {
-    const url = `https://kiroflix.site/backend/command_update.php`; // single PHP file
+    const url = "https://kiroflix.site/backend/command_update.php";
+
     const response = await axios.post(url, {
       group_id: groupId,
       admin_id: adminId,
       command: command,
       action: action
     });
+
     return response.data;
+
   } catch (err) {
     console.error(`❌ Failed to update command '${command}':`, err.message);
-    return { status: "error", message: err.message };
+
+    return {
+      status: "error",
+      message: err.message
+    };
   }
 }
-// -------------------- GROUP MENU LOGIC --------------------
+
+//
+// -------------------- GROUP COMMANDS LIST --------------------
+//
+
 const groupCommands = {
   games: "🎮 Activate or deactivate group games (use: .games on/off)",
   leaderboard: "🏆 Show group game leaderboard",
   rules: "📜 Show group rules or info"
 };
+
+//
+// -------------------- GROUP MENU --------------------
+//
+
 async function sendGroupMenu(sock, from, sender) {
   try {
-    // fetch group metadata
     const metadata = await sock.groupMetadata(from);
+
     const adminIds = metadata.participants
       .filter(p => p.admin === "admin" || p.admin === "superadmin")
       .map(p => p.id);
 
-    if (!adminIds.includes(sender)) {
-      return;
-    }
+    // Only admins can see menu
+    if (!adminIds.includes(sender)) return;
 
     const menuText = Object.entries(groupCommands)
-      .map(([cmd, desc]) => `• ${cmd} → ${desc}`)
+      .map(([cmd, desc]) => `• .${cmd} → ${desc}`)
       .join("\n");
 
     await sock.sendMessage(from, {
-      text: `📋 *Group Commands Menu:*\n\n${menuText}`
+      text:
+`📋 *Group Commands Menu*
+
+${menuText}
+
+Example:
+.games on
+.games off`
     });
+
   } catch (err) {
     console.error("❌ Failed to send group menu:", err.message);
   }
 }
-// -------------------- GLOBAL TOGGLE HANDLER --------------------
+
+//
+// -------------------- GROUP TOGGLE HANDLER --------------------
+//
+
 async function handleGroupToggle(sock, from, sender, text) {
+
   try {
-    // fetch group metadata
+
     const metadata = await sock.groupMetadata(from);
+
     const adminIds = metadata.participants
       .filter(p => p.admin === "admin" || p.admin === "superadmin")
       .map(p => p.id);
 
-    
+    // ❌ Only admins allowed
+    if (!adminIds.includes(sender)) {
+      return false;
+    }
 
-    // Example: ".games on" or ".games off"
+    // Example: ".games on"
     const match = text.match(/^\.([a-zA-Z0-9_-]+)\s+(on|off)$/i);
-    if (!match) return false; // Not a toggle command
+    if (!match) return false;
 
-    const [, command, actionRaw] = match;
+    const [, commandRaw, actionRaw] = match;
+
+    const command = commandRaw.toLowerCase();
     const action = actionRaw.toLowerCase();
 
-    // ✅ Call global PHP update
+    // ❌ Ignore if command not in defined list
+    if (!groupCommands[command]) {
+      return false;
+    }
+
+    // ✅ Update backend
     const result = await updateCommandStatus(from, sender, command, action);
 
     await sock.sendMessage(from, {
-      text: `🎯 Command '${command}' has been set to *${action}*.\nResponse: ${result.message}`
+      text: `🎯 *${command}* has been set to *${action}*\n${result.message || ""}`
     });
 
-    return true; // handled
+    return true;
+
   } catch (err) {
+
     console.error("❌ Failed to handle toggle:", err.message);
-    await sock.sendMessage(from, { text: `⚠️ Error updating command: ${err.message}` });
-    return true; // considered handled
+
+    await sock.sendMessage(from, {
+      text: `⚠️ Error updating command`
+    });
+
+    return true;
   }
 }
 async function startBot() {
