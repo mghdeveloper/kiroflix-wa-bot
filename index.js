@@ -1573,9 +1573,9 @@ async function startBot() {
       console.log("✅ WhatsApp connected");
       qrCodeDataURL = null; // clear QR
       // Run immediately on startup
-      await checkNewEpisodes(sock);
+      // await checkNewEpisodes(sock);
       // Then run every hour
-      setInterval(() => checkNewEpisodes(sock), 3600000);
+      // setInterval(() => checkNewEpisodes(sock), 3600000);
     }
 
     if (connection === "close") {
