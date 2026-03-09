@@ -104,7 +104,7 @@ async function buildContext(userJid, currentText, maxRecent = 5) {
 async function searchReference(query) {
   try {
     const { data } = await axios.get(
-      "https://duckduckgotool.onrender.com/search",
+      "https://kirotools.onrender.com/search",
       {
         params: {
           q: query,
@@ -660,7 +660,7 @@ async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
     const tempPath = path.join(os.tmpdir(), `img_${Date.now()}_${index}.jpg`);
     try {
       // download image as arraybuffer
-      const res = await axios.get(`https://image-fetcher-2.onrender.com/proxy?url=${encodeURIComponent(url)}`, {
+      const res = await axios.get(`https://kirotools.onrender.com/proxy?url=${encodeURIComponent(url)}`, {
         responseType: "arraybuffer",
         timeout: 120000
       });
