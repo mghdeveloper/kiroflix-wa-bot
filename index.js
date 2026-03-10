@@ -1347,7 +1347,7 @@ async function checkNewChapters(sock) {
 
     // 1️⃣ Fetch latest chapters
     const { data } = await axios.get(
-      "https://comix.to/api/v2/manga?exclude_genres[]=87264&exclude_genres[]=87266&exclude_genres[]=87268&exclude_genres[]=87265&scope=new&limit=30&order[chapter_updated_at]=desc&page=1",
+      "https://kiroflix.site/backend/get_manhwa.php?proxy.php?route=latest&page=1",
       { timeout: 120000 }
     );
 
