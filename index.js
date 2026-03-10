@@ -1955,9 +1955,11 @@ const groupActivity = {};
 const lastGameTime = {};
 async function fetchTrendingAnime() {
 
+  const randomPage = Math.floor(Math.random() * 20) + 1; // pages 1-20
+
   const query = `
   query {
-    Page(page:1, perPage:10){
+    Page(page:${randomPage}, perPage:10){
       media(sort:TRENDING_DESC, type:ANIME){
         title{
           romaji
@@ -2036,11 +2038,12 @@ async function startAnimeGame(sock, groupId) {
   if (!game) return;
 
   activeGames[groupId] = {
-    questions: game.questions,
-    currentQuestion: 0,
-    scores: {},
-    answeredUsers: {}
-  };
+  questions: game.questions,
+  currentQuestion: 0,
+  scores: {},
+  answeredUsers: {},
+  userReplies: {} // ⭐ store user answers for AI validation
+};
 
   sock.sendMessage(groupId,{
     text:`🎮 *Anime Quiz Started!*
@@ -2054,77 +2057,140 @@ Good luck!`
 
   askNextQuestion(sock, groupId);
 }
-async function askNextQuestion(sock, groupId){
-
+async function askNextQuestion(sock, groupId) {
   const game = activeGames[groupId];
   if (!game) return;
 
-  if (game.currentQuestion >= game.questions.length){
+  if (game.currentQuestion >= game.questions.length) {
     return endGame(sock, groupId);
   }
 
   const q = game.questions[game.currentQuestion];
 
   game.answeredUsers = {};
+  game.userReplies = {};
 
-  await sock.sendMessage(groupId,{
-    text:`❓ Question ${game.currentQuestion+1}/10
-
-${q.question}
-
-⏳ You have 30 second`
+  const sent = await sock.sendMessage(groupId, {
+    text: `❓ Question ${game.currentQuestion + 1}/10\n\n${q.question}\n\n⏳ You have 30 seconds`
   });
 
-  game.timer = setTimeout(()=>{
-    revealAnswer(sock, groupId);
-  }, 30000); // 30 seconds
+  // Store the message ID to track replies
+  game.currentQuestionMessageId = sent.key.id;
 
+  // Set timer to reveal answer
+  game.timer = setTimeout(() => revealAnswer(sock, groupId), 30_000);
 }
-async function revealAnswer(sock, groupId){
+async function revealAnswer(sock, groupId) {
 
   const game = activeGames[groupId];
+
+  // ❌ Check if game still exists
+  if (!game || !game.questions) {
+    // clear the timer if somehow set
+    if (game?.timer) clearTimeout(game.timer);
+    delete activeGames[groupId];
+    return;
+  }
+
   const q = game.questions[game.currentQuestion];
 
-  await sock.sendMessage(groupId,{
-    text:`⏰ Time's up!
+  if (!q) {
+    delete activeGames[groupId];
+    return;
+  }
+
+  const replies = game.userReplies || {};
+  let results = {};
+
+  if (Object.keys(replies).length > 0) {
+    const prompt = `
+Question:
+${q.question}
 
 Correct answer:
-*${q.answer}*`
+${q.answer}
+
+User answers:
+${JSON.stringify(replies)}
+
+Return JSON only:
+
+{
+ "results":{
+   "user@jid": true,
+   "user2@jid": false
+ }
+}
+`;
+
+    try {
+      const ai = await askAI(prompt);
+      const clean = ai.replace(/```json/g,"").replace(/```/g,"").trim();
+      const parsed = JSON.parse(clean);
+      results = parsed.results || {};
+    } catch (e) {
+      console.log("AI validation failed");
+    }
+  }
+
+  let message = `⏰ Time's up!\n\nCorrect answer:\n*${q.answer}*\n\n`;
+
+  for (const user in results) {
+    if (results[user]) {
+      game.scores[user] = (game.scores[user] || 0) + 1;
+      message += `✅ @${user.split("@")[0]} +1 point\n`;
+    } else {
+      message += `❌ @${user.split("@")[0]} wrong\n`;
+    }
+  }
+
+  await sock.sendMessage(groupId,{
+    text: message,
+    mentions: Object.keys(results)
   });
 
+  game.userReplies = {};
   game.currentQuestion++;
 
-  setTimeout(()=>{
-    askNextQuestion(sock, groupId);
-  }, 4000);
+  // ❌ Check if we still have questions left
+  if (game.currentQuestion >= game.questions.length) {
+    return endGame(sock, groupId);
+  }
+
+  // next question
+  game.timer = setTimeout(()=>{ askNextQuestion(sock, groupId); }, 4000);
 }
 async function endGame(sock, groupId){
 
   const game = activeGames[groupId];
+  if (!game) return;
 
   let board = "🏆 *Final Scoreboard*\n\n";
 
   const sorted = Object.entries(game.scores)
-  .sort((a,b)=>b[1]-a[1]);
-  if (sorted.length === 0) {
-  await sock.sendMessage(groupId,{
-    text:`🏁 Game finished!\n\nNobody scored this round 😅`
-  });
+    .sort((a,b)=>b[1]-a[1]);
 
-  delete activeGames[groupId];
-  return;
-}
+  if (sorted.length === 0) {
+
+    await sock.sendMessage(groupId,{
+      text:`🏁 Game finished!\n\nNobody scored this round 😅`
+    });
+
+    delete activeGames[groupId];
+    return;
+  }
 
   sorted.forEach(([user,score],i)=>{
     board += `${i+1}. @${user.split("@")[0]} — ${score} pts\n`;
   });
 
   await sock.sendMessage(groupId,{
-  text: board,
-  mentions: sorted.map(([u]) => u)
-});
+    text: board,
+    mentions: sorted.map(([u]) => u)
+  });
 
-  saveScores(groupId, game.scores);
+  // ⭐ SAVE FINAL SCORES
+  await saveScores(groupId, game.scores);
 
   delete activeGames[groupId];
 }
@@ -2249,96 +2315,117 @@ async function searchAnimeCharacter(name) {
   }
 }
 // -------------------- ANTI-SPAM (Rapid & Repeated Detection) --------------------
-const userMessageCache = {}; // { groupId: { userId: [{content, type, timestamp}, ...] } }
-const SPAM_WARN_THRESHOLD = 3; // messages to warn
-const SPAM_KICK_THRESHOLD = 5; // messages to kick
-const SPAM_COOLDOWN = 8000; // 8 seconds window
+const userMessageCache = {}; // { groupId: { userId: [{content, timestamp}, ...] } }
+const groupMetadataCache = {}; // cache to reduce API calls
 
-async function handleAntiSpam(sock, msg) {
-  const from = msg.key.remoteJid;
-  if (!from.endsWith("@g.us")) return; // only for groups
+async function getCachedGroupMetadata(sock, groupId) {
+  if (groupMetadataCache[groupId]) return groupMetadataCache[groupId];
 
-  // ❌ Check if anti-spam is ON
-  if (groupCommandsCache[from]?.antispam !== "on") return;
+  try {
+    const metadata = await sock.groupMetadata(groupId);
+    groupMetadataCache[groupId] = metadata;
 
-  const userId = msg.key.participant || msg.key.remoteJid;
+    // Refresh cache every 5 minutes
+    setTimeout(() => delete groupMetadataCache[groupId], 300_000);
 
-  // Skip if user is admin
-  const metadata = await sock.groupMetadata(from);
-  const isAdmin = metadata.participants.some(
-    p => p.id === userId && (p.admin === "admin" || p.admin === "superadmin")
-  );
-  if (isAdmin) return;
-
-  // Extract message content (string fallback for any type)
-  let content = "";
-  if (msg.message.conversation) content = msg.message.conversation;
-  else if (msg.message.extendedTextMessage?.text) content = msg.message.extendedTextMessage.text;
-  else if (msg.message.imageMessage?.caption) content = msg.message.imageMessage.caption || "<image>";
-  else if (msg.message.videoMessage?.caption) content = msg.message.videoMessage.caption || "<video>";
-  else if (msg.message.stickerMessage) content = "<sticker>";
-  else content = JSON.stringify(msg.message);
-
-  const type = Object.keys(msg.message)[0] || "unknown";
-
-  if (!userMessageCache[from]) userMessageCache[from] = {};
-  if (!userMessageCache[from][userId]) userMessageCache[from][userId] = [];
-
-  const now = Date.now();
-  // Push current message
-  userMessageCache[from][userId].push({ content, type, timestamp: now });
-
-  // Remove messages older than cooldown
-  userMessageCache[from][userId] = userMessageCache[from][userId].filter(
-    m => now - m.timestamp <= SPAM_COOLDOWN
-  );
-
-  const msgCount = userMessageCache[from][userId].length;
-
-  const admins = metadata.participants
-    .filter(p => p.admin === "admin" || p.admin === "superadmin")
-    .map(p => p.id);
-
-  // ✅ First warning
-  if (msgCount === SPAM_WARN_THRESHOLD) {
-    await sock.sendMessage(from, {
-      text: `⚠️ @${userId.split("@")[0]} Stop spamming! This is your warning.`,
-      mentions: [userId]
-    });
-    return;
-  }
-
-  // ✅ Kick for spam
-  if (msgCount >= SPAM_KICK_THRESHOLD) {
-    const botIsAdmin = metadata.participants.some(
-      p => p.id === sock.user.id && (p.admin === "admin" || p.admin === "superadmin")
-    );
-
-    if (botIsAdmin) {
-      await sock.groupParticipantsUpdate(from, [userId], "remove").catch(console.error);
-      await sock.sendMessage(from, {
-        text: `🚫 @${userId.split("@")[0]} was removed for spamming.`,
-        mentions: [userId]
-      });
-    } else {
-      await sock.sendMessage(from, {
-        text: `⚠️ @${userId.split("@")[0]} is spamming! Bot needs admin to remove.`,
-        mentions: [userId]
-      });
-    }
-
-    // Notify admins
-    await sock.sendMessage(from, {
-      text: `👮 Admins, please check spam behavior of @${userId.split("@")[0]}.`,
-      mentions: admins
-    });
-
-    // Clear user cache
-    userMessageCache[from][userId] = [];
-    return;
+    return metadata;
+  } catch (err) {
+    console.error("Failed to fetch group metadata:", err.message);
+    return null;
   }
 }
 
+async function handleGroupProtection(sock, msg) {
+  try {
+    const from = msg.key.remoteJid;
+    if (!from.endsWith("@g.us")) return; // only groups
+
+    const userId = msg.key.participant || msg.key.remoteJid;
+    const metadata = await getCachedGroupMetadata(sock, from);
+    if (!metadata) return; // skip if cannot get metadata
+
+    // Skip admins & bot
+    if (metadata.participants.some(p => ["admin", "superadmin", "creator"].includes(p.admin) && p.id === userId)) return;
+    if (userId === sock.user.id) return;
+
+    // Extract message content
+    let content = "";
+    if (msg.message.conversation) content = msg.message.conversation;
+    else if (msg.message.extendedTextMessage?.text) content = msg.message.extendedTextMessage.text;
+    else if (msg.message.imageMessage?.caption) content = msg.message.imageMessage.caption || "<image>";
+    else if (msg.message.videoMessage?.caption) content = msg.message.videoMessage.caption || "<video>";
+    else if (msg.message.stickerMessage) content = "<sticker>";
+    else content = JSON.stringify(msg.message);
+
+    const now = Date.now();
+    if (!userMessageCache[from]) userMessageCache[from] = {};
+    if (!userMessageCache[from][userId]) userMessageCache[from][userId] = [];
+    userMessageCache[from][userId].push({ content, timestamp: now });
+
+    const admins = metadata.participants
+      .filter(p => ["admin", "superadmin", "creator"].includes(p.admin))
+      .map(p => p.id);
+
+    // ------------------- ANTI-FLOOD -------------------
+    if (groupCommandsCache[from]?.antiflood === "on") {
+      const FLOOD_COOLDOWN = 3000; // 3 sec
+      const FLOOD_THRESHOLD = 5;   // 5 messages in 3s
+      const recent = userMessageCache[from][userId].filter(m => now - m.timestamp <= FLOOD_COOLDOWN);
+
+      if (recent.length >= FLOOD_THRESHOLD) {
+        try {
+          await sock.groupParticipantsUpdate(from, [userId], "remove");
+          await sock.sendMessage(from, { text: `🚫 @${userId.split("@")[0]} removed for flooding.`, mentions: [userId] });
+        } catch {
+          if (admins.length) await sock.sendMessage(from, { text: `⚠️ @${userId.split("@")[0]} is flooding! Admins, take action.`, mentions: admins });
+        }
+        userMessageCache[from][userId] = [];
+        return;
+      }
+    }
+
+    // ------------------- ANTI-SPAM -------------------
+    if (groupCommandsCache[from]?.antispam === "on") {
+      const SPAM_COOLDOWN = 60_000; // 1 min
+      const SPAM_WARN = 3;
+      const SPAM_KICK = 5;
+      const recent = userMessageCache[from][userId].filter(m => now - m.timestamp <= SPAM_COOLDOWN);
+      const repeatCount = recent.filter(m => m.content === content).length;
+
+      if (repeatCount === SPAM_WARN) {
+        await sock.sendMessage(from, { text: `⚠️ @${userId.split("@")[0]} Stop spamming! This is your warning.`, mentions: [userId] });
+      } else if (repeatCount >= SPAM_KICK) {
+        try {
+          await sock.groupParticipantsUpdate(from, [userId], "remove");
+          await sock.sendMessage(from, { text: `🚫 @${userId.split("@")[0]} removed for spamming.`, mentions: [userId] });
+        } catch {
+          if (admins.length) await sock.sendMessage(from, { text: `⚠️ @${userId.split("@")[0]} is spamming! Admins, take action.`, mentions: admins });
+        }
+        userMessageCache[from][userId] = [];
+        return;
+      }
+    }
+
+    // ------------------- LINK BLOCKING -------------------
+    if (groupCommandsCache[from]?.links === "on") {
+      const urlRegex = /(https?:\/\/[^\s]+)/gi;
+      if (urlRegex.test(content)) {
+        try {
+          await sock.groupParticipantsUpdate(from, [userId], "remove");
+          await sock.sendMessage(from, { text: `🚫 @${userId.split("@")[0]} removed for sending links.`, mentions: [userId] });
+        } catch {
+          if (admins.length) await sock.sendMessage(from, { text: `⚠️ @${userId.split("@")[0]} sent a link! Admins, take action.`, mentions: admins });
+        }
+        userMessageCache[from][userId] = [];
+        return;
+      }
+    }
+
+  } catch (err) {
+    console.error("❌ handleGroupProtection error:", err.message);
+    // Do not throw, just log and continue
+  }
+}
 //
 // -------------------- GROUP MENU --------------------
 //
@@ -2418,9 +2505,9 @@ async function handleGroupToggle(sock, from, sender, text) {
 
     // Initialize cache for group if missing
     if (!groupCommandsCache[from]) {
-      groupCommandsCache[from] = {};
-      Object.keys(groupCommands).forEach(cmd => (groupCommandsCache[from][cmd] = "on"));
-    }
+  groupCommandsCache[from] = {};
+  Object.keys(toggledCommands).forEach(cmd => (groupCommandsCache[from][cmd] = "on"));
+}
 
     // ✅ Update cache
     groupCommandsCache[from][command] = action;
@@ -2428,9 +2515,15 @@ async function handleGroupToggle(sock, from, sender, text) {
     // ✅ Update backend
     const result = await updateCommandStatus(from, sender, command, action);
 
-    await sock.sendMessage(from, {
-      text: `🎯 *${command}* has been set to *${action}*\n${result.message || ""}`
-    });
+    if (result.status === "error") {
+  await sock.sendMessage(from, {
+    text: `⚠️ Failed to update command`
+  });
+} else {
+  await sock.sendMessage(from, {
+    text: `🎯 *${command}* has been set to *${action}*`
+  });
+}
 
     return true;
 
@@ -2510,7 +2603,9 @@ setInterval(async () => {
 
     if (activeGames[groupId]) continue;
 
+    if (groupCommandsCache[groupId]?.bot === "off") continue;
     if (groupCommandsCache[groupId]?.games !== "on") continue;
+    
 
     console.log("🎮 Starting game in", groupId);
 
@@ -2554,7 +2649,7 @@ setInterval(async () => {
     // update last activity time
 if (isGroup) {
   try {
-    await handleAntiSpam(sock, msg);
+    await handleGroupProtection(sock, msg);
   } catch(e) {
     console.error("Anti-spam error:", e);
   }
@@ -2580,14 +2675,10 @@ if (isGroup && text.toLowerCase().startsWith("/kiroflix")) {
 
   // List of commands that are not available yet
   const upcomingCommands = [
-    ".antispam",
-    ".antiflood",
-    ".links",
     ".welcome",
     ".mute",
     ".slowmode",
     ".guessanime",
-    ".quiz",
     ".kick",
     ".ban",
     ".leaderboard",
@@ -2613,45 +2704,34 @@ if (isGroup && text.toLowerCase().startsWith("/kiroflix")) {
     }
   }
 }
-    // 🎮 Check if group game is running
+   // 🎮 Check if group game is running
+// 🎮 Check if group game is running
 if (isGroup && activeGames[from]) {
-
   const game = activeGames[from];
+
+  // ❌ Do not allow games if bot is disabled
+  if (groupCommandsCache[from]?.bot === "off") return;
+
   const user = msg.key.participant || msg.key.remoteJid;
 
-  const q = game.questions[game.currentQuestion];
-  if (!q) return;
+  // ❌ Only process replies to the current question
+  if (!msg.message.extendedTextMessage?.contextInfo?.stanzaId) return; // not a reply
+  const repliedTo = msg.message.extendedTextMessage.contextInfo.stanzaId;
+  if (repliedTo !== game.currentQuestionMessageId) return; // not replying to current question
 
-  // prevent multiple answers from same user
-  if (game.answeredUsers[user]) return;
-  const normalize = (t) => t.replace(/[^\w\s]/g,"").toLowerCase().trim();
+  // ❌ Prevent multiple answers
+  if (game.userReplies[user]) return;
 
-const userAnswer = normalize(text);
-const correct = normalize(q.answer);
+  // ❌ Prevent very long answers
+  const textAnswer = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+  if (!textAnswer || textAnswer.length > 60) return;
 
-if (userAnswer === correct || userAnswer.includes(correct)) {
+  // Normalize text
+  const normalize = t => t.replace(/[^\w\s]/g, "").toLowerCase().trim();
+  const userAnswer = normalize(textAnswer);
 
-    game.answeredUsers[user] = true;
-
-    game.scores[user] = (game.scores[user] || 0) + 1;
-
-    clearTimeout(game.timer);
-
-    await sock.sendMessage(from,{
-      text:`✅ Correct!
-
-+1 point to @${user.split("@")[0]}`,
-      mentions:[user]
-    });
-
-    game.currentQuestion++;
-
-    setTimeout(()=>{
-      askNextQuestion(sock, from);
-    },2000);
-
-  }
-
+  // Store reply for later AI validation
+  game.userReplies[user] = userAnswer;
 }
     if (isGroup) {
   // ✅ Check bot status
@@ -2751,6 +2831,94 @@ No one else can claim this waifu now.`,
     if (isGroup) {
       if (!text.toLowerCase().startsWith("/kiroflix")) return;
       text = text.replace(/^\/kiroflix/i, "").trim();
+      // 🎮 Manual quiz start by admin
+if (isGroup && text.toLowerCase() === ".quiz start") {
+
+  const user = msg.key.participant || msg.key.remoteJid;
+
+  const admins = await getGroupAdmins(from);
+  const isAdmin = admins.includes(user);
+
+  if (!isAdmin) {
+    await sock.sendMessage(from,{
+      text:"❌ Only group admins can start the quiz."
+    });
+    return;
+  }
+
+  if (groupCommandsCache[from]?.bot === "off") {
+    await sock.sendMessage(from,{
+      text:"❌ Bot is disabled in this group."
+    });
+    return;
+  }
+
+  if (groupCommandsCache[from]?.games !== "on") {
+    await sock.sendMessage(from,{
+      text:"❌ Games are disabled in this group."
+    });
+    return;
+  }
+
+  if (activeGames[from]) {
+    await sock.sendMessage(from,{
+      text:"⚠️ A quiz game is already running."
+    });
+    return;
+  }
+
+  // ⏳ 2 hour cooldown
+  const cooldown = 7200000; // 2 hours
+  const last = lastGameTime[from] || 0;
+  const remaining = cooldown - (Date.now() - last);
+
+  if (remaining > 0) {
+
+    const minutes = Math.ceil(remaining / 60000);
+
+    await sock.sendMessage(from,{
+      text:`⏳ You must wait *${minutes} minutes* before starting another quiz.`
+    });
+
+    return;
+  }
+
+  await sock.sendMessage(from,{
+    text:"🎮 Admin started a quiz!"
+  });
+
+  startAnimeGame(sock, from);
+
+  return;
+}
+      // 🛑 Admin force stop quiz
+if (isGroup && text.toLowerCase() === ".quiz stop") {
+
+  const user = msg.key.participant || msg.key.remoteJid;
+  const admins = await getGroupAdmins(from);
+
+  if (!admins.includes(user)) {
+    await sock.sendMessage(from,{
+      text:"❌ Only admins can stop the quiz."
+    });
+    return;
+  }
+
+  if (!activeGames[from]) {
+    await sock.sendMessage(from,{
+      text:"⚠️ No quiz is currently running."
+    });
+    return;
+  }
+
+  await sock.sendMessage(from,{
+    text:"🛑 Quiz stopped by admin."
+  });
+
+  await endGame(sock, from);
+
+  return;
+}
       if (text.length > MAX_MESSAGE_LENGTH) {
         await sock.sendMessage(from, {
           text: "⚠️ Request too long.\nExample:\n/kiroflix Naruto episode 5"
