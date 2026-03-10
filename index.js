@@ -2646,6 +2646,7 @@ setInterval(async () => {
       "";
     if (!text) return;
     text = text.trim();
+    
     // update last activity time
 if (isGroup) {
   try {
@@ -2706,44 +2707,28 @@ if (isGroup && text.toLowerCase().startsWith("/kiroflix")) {
 }
    // 🎮 Check if group game is running
 // 🎮 Check if group game is running
+// 🎮 Check if group game is running
 if (isGroup && activeGames[from]) {
   const game = activeGames[from];
-
-  // ❌ Do not allow games if bot is disabled
-  if (groupCommandsCache[from]?.bot === "off") return;
-
   const user = msg.key.participant || msg.key.remoteJid;
 
-  // ❌ Only process replies to the current question
-  if (!msg.message.extendedTextMessage?.contextInfo?.stanzaId) return; // not a reply
-  const repliedTo = msg.message.extendedTextMessage.contextInfo.stanzaId;
-  if (repliedTo !== game.currentQuestionMessageId) return; // not replying to current question
-
-  // ❌ Prevent multiple answers
-  if (game.userReplies[user]) return;
-
-  // ❌ Prevent very long answers
-  const textAnswer = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-  if (!textAnswer || textAnswer.length > 60) return;
-
-  // Normalize text
-  const normalize = t => t.replace(/[^\w\s]/g, "").toLowerCase().trim();
-  const userAnswer = normalize(textAnswer);
-
-  // Store reply for later AI validation
-  game.userReplies[user] = userAnswer;
-}
-    if (isGroup) {
-  // ✅ Check bot status
-  const botStatus = groupCommandsCache[from]?.bot || "on";
-
-  // ❌ Skip all messages if bot is OFF, except commands to toggle it
-  if (
-    botStatus === "off" &&
-    !text.toLowerCase().startsWith("/kiroflix .bot")
-  ) {
-    return; // ignore everything else
+  // Only process replies to the current question
+  const repliedTo = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
+  if (repliedTo && repliedTo === game.currentQuestionMessageId) {
+    // ❌ Prevent multiple answers
+    if (!game.userReplies[user]) {
+      const textAnswer = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+      if (textAnswer.length <= 60) {
+        game.userReplies[user] = textAnswer
+          .replace(/[^\w\s]/g, "")
+          .toLowerCase()
+          .trim();
+      }
+    }
   }
+
+  // ❌ If it’s not a reply to the game, do NOT block other checks
+  // → The rest of your code (anti-spam, commands, etc.) continues as usual
 }
     // ✅ Group menu command restricted to admins
 // -------------------- MESSAGE HANDLER --------------------
