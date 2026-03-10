@@ -2155,9 +2155,40 @@ async function fetchGroupsFromBackend() {
 
     if (data.success && data.data) {
       data.data.forEach(group => {
-        // Initialize toggled commands with default "on"
+        // Initialize toggled commands with default values
         const commands = {};
-        Object.keys(toggledCommands).forEach(cmd => (commands[cmd] = "on"));
+
+        // Define which commands default ON and which default OFF
+        const defaultOn = [
+          "bot",
+          "ai",
+          "anime",
+          "lasteps",
+          "animerec",
+          "manhwa",
+          "manhwadaily",
+          "manhwarelease",
+          "wallpaper",
+          "wallpaperdaily"
+        ];
+
+        const defaultOff = [
+          "games",
+          "waifu",
+          "antispam",
+          "antiflood",
+          "links",
+          "welcome",
+          "mute",
+          "slowmode"
+        ];
+
+        // Set defaults
+        Object.keys(toggledCommands).forEach(cmd => {
+          if (defaultOn.includes(cmd)) commands[cmd] = "on";
+          else if (defaultOff.includes(cmd)) commands[cmd] = "off";
+          else commands[cmd] = "on"; // fallback
+        });
 
         // Override with backend status if available
         if (group.commands && Array.isArray(group.commands)) {
@@ -2168,6 +2199,7 @@ async function fetchGroupsFromBackend() {
           });
         }
 
+        // Save to cache
         groupCommandsCache[group.group_id] = commands;
       });
     }
