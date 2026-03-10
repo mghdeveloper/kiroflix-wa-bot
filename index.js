@@ -56,7 +56,49 @@ const DAILY_LIMIT = 50; // per user per day
 const GEMINI_KEY = process.env.GEMINI_KEY;
 const GEMINI_URL =
   "https://generativelanguage.googleapis.com/v1beta/models/gemma-3-27b-it:generateContent";
+//
+// -------------------- GROUP COMMANDS LIST --------------------
+//
 
+// -------------------- GROUP ADMIN COMMANDS --------------------
+// -------------------- TOGGLED COMMANDS (on/off) --------------------
+const toggledCommands = {
+  bot: "🤖 Enable/disable the bot in this group (.bot on/off)",
+  ai: "🧠 Enable/disable AI replies (.ai on/off)",
+  anime: "🎬 Enable/disable anime requests (.anime on/off)",
+  lasteps: "📢 Auto notify when new anime episodes release (.lasteps on/off)",
+  animerec: "⭐ Daily anime recommendation (.animerec on/off)",
+  manhwa: "📚 Enable/disable manhwa reader (.manhwa on/off)",
+  manhwadaily: "📖 Daily random manhwa chapter (.manhwadaily on/off)",
+  manhwarelease: "🚀 Notify when new manhwa chapter releases (.manhwarelease on/off)",
+  wallpaper: "🖼 Enable wallpaper search (.wallpaper on/off)",
+  wallpaperdaily: "🌅 Daily anime wallpaper (.wallpaperdaily on/off)",
+  games: "🎮 Enable group games (.games on/off)",
+  waifu: "💖 Waifu claim system (.waifu on/off)",
+  antispam: "🚫 Anti spam protection (.antispam on/off)",
+  antiflood: "⚡ Anti flood protection (.antiflood on/off)",
+  links: "🔗 Block links (.links on/off)",
+  welcome: "👋 Welcome message (.welcome on/off)",
+  mute: "🔇 Mute the bot (.mute on/off)",
+  slowmode: "🐢 Enable slowmode (.slowmode 10s)"
+};
+
+// -------------------- NON-TOGGLED COMMANDS --------------------
+const nonToggledCommands = {
+  guessanime: "🎯 Anime guessing game (.guessanime start)",
+  quiz: "🧠 Anime quiz (.quiz start)",
+  kick: "👢 Kick mentioned user (.kick @user)",
+  ban: "⛔ Ban user from bot (.ban @user)",
+  leaderboard: "🏆 Group leaderboard",
+  stats: "📊 Show group usage stats",
+  active: "🔥 Show most active users",
+  settings: "⚙ Show group settings",
+  reset: "♻ Reset group configuration",
+  menu: "📋 Show admin menu",
+  watchparty: "🍿 Start group watch party (.watchparty start)"
+};
+// -------------------- LOCAL CACHE --------------------
+let groupCommandsCache = {}; 
 // -------------------- LOGGER --------------------
 function logStep(step, data = "") {
   console.log(`\n===== ${step} =====`);
@@ -861,7 +903,7 @@ Recent messages are more important than older ones.
 "anime"
 "manhwa"
 "wallpaper"
-"casual"
+"ai"
 "unknown"
 
 ---
@@ -898,17 +940,13 @@ gojo background  -> gojo
 
 ---
 
-❌ casual  
+❌ ai  
 User asks for recommendations, explanations, reviews, discussion.
 
 Examples:
 recommend anime  
 is one piece good  
 best romance anime  
-
----
-
-If the intent is unclear → "unknown".
 
 ---
 
@@ -920,7 +958,7 @@ ${context}
 Return ONLY JSON:
 
 {
-"type":"anime|manhwa|wallpaper|casual|unknown",
+"type":"anime|manhwa|wallpaper|ai",
 "resolvedMessage":"corrected and resolved user message",
 "topicContext":"short topic like 'One Piece episode 400' or 'Solo Leveling chapter 20' or 'Naruto wallpaper' or null"
 }
@@ -1253,45 +1291,152 @@ async function checkNewEpisodes(sock) {
     // 3️⃣ Mark new episodes as processed
     newEpisodes.forEach(ep => processedEpisodes.add(ep.episode_id));
 
-    // 4️⃣ Fetch all unique users
-    const { data: usersData } = await axios.get("https://kiroflix.site/backend/get_unique_wa_users.php", { timeout: 15000 });
-    if (!usersData?.success) {
-      console.log("⚠️ Failed to fetch users");
+    // 4️⃣ Filter groups where 'lastepisodes' command is ON
+    const eligibleGroups = Object.entries(groupCommandsCache)
+      .filter(([groupId, cmds]) => cmds.lastepisodes === "on")
+      .map(([groupId]) => groupId);
+
+    if (!eligibleGroups.length) {
+      console.log("⚠️ No groups with last episodes enabled");
       return;
     }
 
-    const users = usersData.data;
-
-    // 5️⃣ Prepare the message lines
+    // 5️⃣ Prepare the message
     const messageLines = newEpisodes.map(ep => `🎬 ${ep.anime_title} - ${ep.episode_title}\n▶️ Stream not available`);
-
-    // 6️⃣ Pick poster of the last episode in the list that has a poster
+    const fullMessage = messageLines.join("\n\n");
     const lastPosterEpisode = [...newEpisodes].reverse().find(ep => ep.poster1);
     const lastPoster = lastPosterEpisode?.poster1 || null;
 
-    // 7️⃣ Send messages to all users
-    for (const user of users) {
-      const from = user.user_jid;
-      const fullMessage = messageLines.join("\n\n");
+    console.log(`ℹ️ Sending new episodes to ${eligibleGroups.length} groups`);
 
-      if (lastPoster) {
-        await sock.sendMessage(from, {
-          image: { url: lastPoster },
-          caption: `📢 New episodes released!\n\n${fullMessage}`
-        }).catch(() => {});
-      } else {
-        await sock.sendMessage(from, {
-          text: `📢 New episodes released!\n\n${fullMessage}`
-        }).catch(() => {});
+    // 6️⃣ Send to groups with throttling to avoid bans
+    for (const groupId of eligibleGroups) {
+      try {
+        if (lastPoster) {
+          await sock.sendMessage(groupId, {
+            image: { url: lastPoster },
+            caption: `📢 New episodes released!\n\n${fullMessage}`
+          });
+        } else {
+          await sock.sendMessage(groupId, {
+            text: `📢 New episodes released!\n\n${fullMessage}`
+          });
+        }
+
+        console.log(`✅ Sent new episodes to group: ${groupId}`);
+
+        // 🔹 Delay between groups (adjust as needed, e.g., 3-5s)
+        await new Promise(resolve => setTimeout(resolve, 4000));
+
+      } catch (err) {
+        console.error(`❌ Failed to send to group ${groupId}:`, err.message);
       }
     }
 
-    console.log("✅ New episodes sent to users");
+    console.log("✅ Finished sending new episodes to all eligible groups");
 
   } catch (err) {
     console.error("❌ Episode worker error:", err.message);
   }
 }
+const processedChapters = new Set();
+
+async function checkNewChapters(sock) {
+  try {
+    console.log("⏱ Checking for new manhwa chapters...");
+
+    // 1️⃣ Fetch latest chapters
+    const { data } = await axios.get(
+      "https://comix.to/api/v2/manga?exclude_genres[]=87264&exclude_genres[]=87266&exclude_genres[]=87268&exclude_genres[]=87265&scope=new&limit=30&order[chapter_updated_at]=desc&page=1",
+      { timeout: 120000 }
+    );
+
+    if (!data?.result?.items?.length) {
+      console.log("⚠️ No chapters fetched");
+      return;
+    }
+
+    const chapters = data.result.items;
+
+    // 2️⃣ Filter already processed
+    const newChapters = chapters.filter(
+      ch => !processedChapters.has(ch.manga_id + "-" + ch.latest_chapter)
+    );
+
+    if (!processedChapters.size) {
+      // First run → store only
+      chapters.forEach(ch =>
+        processedChapters.add(ch.manga_id + "-" + ch.latest_chapter)
+      );
+
+      console.log(`ℹ️ First run: stored ${chapters.length} chapters. No messages sent.`);
+      return;
+    }
+
+    if (!newChapters.length) {
+      console.log("✅ No new chapters to send");
+      return;
+    }
+
+    console.log(`📢 Found ${newChapters.length} new chapters`);
+
+    // 3️⃣ Mark processed
+    newChapters.forEach(ch =>
+      processedChapters.add(ch.manga_id + "-" + ch.latest_chapter)
+    );
+
+    // 4️⃣ Filter groups where 'manhwarelease' is ON
+    const eligibleGroups = Object.entries(groupCommandsCache)
+      .filter(([groupId, cmds]) => cmds.manhwarelease === "on")
+      .map(([groupId]) => groupId);
+
+    if (!eligibleGroups.length) {
+      console.log("⚠️ No groups with manhwa releases enabled");
+      return;
+    }
+
+    // 5️⃣ Prepare message
+    const messageLines = newChapters.map(ch =>
+      `📖 ${ch.title} - Chapter ${ch.latest_chapter}\n▶️ Read: https://comix.to/manga/${ch.slug}`
+    );
+
+    const fullMessage = messageLines.join("\n\n");
+
+    const lastPosterChapter = [...newChapters].reverse().find(ch => ch.poster?.large);
+    const lastPoster = lastPosterChapter?.poster?.large || null;
+
+    console.log(`ℹ️ Sending chapters to ${eligibleGroups.length} groups`);
+
+    // 6️⃣ Send with throttling
+    for (const groupId of eligibleGroups) {
+      try {
+        if (lastPoster) {
+          await sock.sendMessage(groupId, {
+            image: { url: lastPoster },
+            caption: `📢 New manhwa chapters released!\n\n${fullMessage}`
+          });
+        } else {
+          await sock.sendMessage(groupId, {
+            text: `📢 New manhwa chapters released!\n\n${fullMessage}`
+          });
+        }
+
+        console.log(`✅ Sent chapters to group: ${groupId}`);
+
+        await new Promise(resolve => setTimeout(resolve, 4000));
+
+      } catch (err) {
+        console.error(`❌ Failed sending to ${groupId}:`, err.message);
+      }
+    }
+
+    console.log("✅ Finished sending new chapters");
+
+  } catch (err) {
+    console.error("❌ Chapter worker error:", err.message);
+  }
+}
+
 async function handleWallpaperRequest(sock, query, from, thinkingKey) {
   try {
 
@@ -1355,6 +1500,7 @@ async function handleMessage(sock, msg) {
   const quotedMsg = msg.quoted || msg;
   const userId = msg.key.remoteJid;
   const from = userId;
+  const isGroup = from.endsWith("@g.us");
 
   // ✅ Ignore status updates
   if (userId === "status@broadcast") return;
@@ -1362,27 +1508,20 @@ async function handleMessage(sock, msg) {
   // 🔒 Cooldown check
   const now = Date.now();
   const lastTime = lastMessageTime.get(userId) || 0;
-
   if (now - lastTime < MESSAGE_COOLDOWN) {
-    await sock.sendMessage(from, {
-      text: "⏳ Please wait before sending another request."
-    });
+    await sock.sendMessage(from, { text: "⏳ Please wait before sending another request." });
     return;
   }
-
   lastMessageTime.set(userId, now);
 
   // 📅 Daily limit check
   const today = new Date().toDateString();
   const userData = dailyUsage.get(userId);
-
   if (!userData || userData.date !== today) {
     dailyUsage.set(userId, { count: 1, date: today });
   } else {
     if (userData.count >= DAILY_LIMIT) {
-      await sock.sendMessage(from, {
-        text: "🚫 Daily limit reached.\nPlease try again tomorrow."
-      });
+      await sock.sendMessage(from, { text: "🚫 Daily limit reached.\nPlease try again tomorrow." });
       return;
     }
     userData.count++;
@@ -1399,74 +1538,389 @@ async function handleMessage(sock, msg) {
     const text =
       msg.message?.conversation ||
       msg.message?.extendedTextMessage?.text ||
+      msg.message?.imageMessage?.caption ||
+      msg.message?.videoMessage?.caption ||
       "";
-
     if (!text) return;
 
     // 🧠 Thinking message
-    const thinkingMsg = await sock.sendMessage(from, {
-      text: "🤔 Thinking..."
-    }, { quoted: quotedMsg });
-
+    const thinkingMsg = await sock.sendMessage(from, { text: "🤔 Thinking..." }, { quoted: quotedMsg });
     const thinkingKey = thinkingMsg.key;
 
     // 🧠 Detect message type
     const typeResult = await detectMessageType(userId, text);
-    const type = typeResult.type;                     // "anime" | "manhwa" | etc.
+    const type = typeResult.type;                     // "anime" | "manhwa" | "wallpaper" | etc.
     const resolvedText = typeResult.resolvedMessage;
-    const conversationContext = typeResult.context;   // Built context
+    const conversationContext = typeResult.context;
+
+    // ✅ Check toggled command status for groups
+    if (isGroup) {
+      const cmdStatus = groupCommandsCache[from] || {};
+      if (type === "anime" && cmdStatus.anime === "off") {
+        await sock.sendMessage(from, { text: "❌ Anime commands are disabled in this group.", edit: thinkingKey });
+        return;
+      }
+      if (type === "manhwa" && cmdStatus.manhwa === "off") {
+        await sock.sendMessage(from, { text: "❌ Manhwa commands are disabled in this group.", edit: thinkingKey });
+        return;
+      }
+      if (type === "wallpaper" && cmdStatus.wallpaper === "off") {
+        await sock.sendMessage(from, { text: "❌ Wallpaper commands are disabled in this group.", edit: thinkingKey });
+        return;
+      }
+      if (type === "ai" && cmdStatus.ai === "off") {
+        await sock.sendMessage(from, { text: "❌ AI responses are disabled in this group.", edit: thinkingKey });
+        return;
+      }
+    }
 
     // 🎬 ANIME
     if (type === "anime") {
       const intent = await parseIntent(resolvedText);
-
       if (!intent || intent.notFound) {
-        await sock.sendMessage(from, {
-          text: "❌ Could not detect anime",
-          edit: thinkingKey
-        });
+        await sock.sendMessage(from, { text: "❌ Could not detect anime", edit: thinkingKey });
         return;
       }
-
-      // ✅ Pass sock!
       await handleAnimeRequest(sock, intent, resolvedText, from, thinkingKey);
       return;
     }
 
     // 📚 MANHWA
     if (type === "manhwa") {
-      await sock.sendMessage(from, {
-        text: "📚 Loading manhwa...",
-        edit: thinkingKey
-      });
-
-      // ✅ Pass sock
+      await sock.sendMessage(from, { text: "📚 Loading manhwa...", edit: thinkingKey });
       await handleManhwaRequest(sock, resolvedText, from, thinkingKey);
       return;
     }
 
     // 🖼️ WALLPAPER
-if (type === "wallpaper") {
+    if (type === "wallpaper") {
+      await sock.sendMessage(from, { text: "🖼️ Finding wallpapers...", edit: thinkingKey });
+      await handleWallpaperRequest(sock, resolvedText, from, thinkingKey);
+      return;
+    }
 
-  await sock.sendMessage(from, {
-    text: "🖼️ Finding wallpapers...",
-    edit: thinkingKey
-  });
-
-  await handleWallpaperRequest(sock, resolvedText, from, thinkingKey);
-  return;
-}
-
-    // 💬 CASUAL / UNKNOWN → pass context to general request
+    // 💬 CASUAL / UNKNOWN
     await handleGeneralRequest(sock, resolvedText, from, thinkingKey, conversationContext);
 
   } catch (err) {
     logError("MAIN HANDLER", err);
-    await sock.sendMessage(msg.key.remoteJid, {
-      text: "⚠️ Something went wrong"
-    }, { quoted: quotedMsg });
+    await sock.sendMessage(from, { text: "⚠️ Something went wrong" }, { quoted: quotedMsg });
   } finally {
     userLocks.delete(userId);
+  }
+}
+const waifuClaims = {}; 
+
+let animeRecFirstRun = true;
+const TEST_GROUP_ID = "120363424824974989@g.us";
+async function fetchAnimeRecommendations() {
+  const recommendations = [];
+
+  for (let i = 0; i < 5; i++) {
+    let page = Math.floor(Math.random() * 1200) + 1; // random page 1-1200
+    let anime = null;
+
+    while (page > 0 && !anime) {
+      try {
+        const { data } = await axios.get(
+          `https://api.jikan.moe/v4/anime?page=${page}&limit=25`
+        );
+
+        if (!data?.data?.length) {
+          page--; // no results, try lower page
+          continue;
+        }
+
+        const filtered = data.data.filter(a =>
+          a.score &&
+          a.synopsis &&
+          a.images?.jpg?.large_image_url &&
+          a.rating &&
+          !["Rx", "Hentai", "Ecchi"].includes(a.rating)
+        );
+
+        if (filtered.length) {
+          // pick a random anime from this page
+          anime = filtered[Math.floor(Math.random() * filtered.length)];
+        } else {
+          page--; // no valid anime, try lower page
+        }
+
+      } catch (err) {
+        console.error(`❌ Error fetching page ${page}:`, err.message);
+        page--; // try lower page if request fails
+      }
+
+      // 🔹 Delay 2 seconds between retries/fetches to avoid 409
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    if (anime) {
+      recommendations.push({
+        title: anime.title,
+        score: anime.score,
+        episodes: anime.episodes || "?",
+        synopsis: anime.synopsis.slice(0, 120) + "...",
+        image: anime.images.jpg.large_image_url,
+        url: anime.url
+      });
+    }
+
+    // 🔹 Delay 2-3 seconds before fetching next page to be safe
+    await new Promise(resolve => setTimeout(resolve, 2500));
+  }
+
+  return recommendations;
+}
+async function sendDailyAnimeRecommendations(sock) {
+  try {
+
+    console.log("📅 Generating daily anime recommendations...");
+
+    const animes = await fetchAnimeRecommendations();
+    if (!animes.length) return;
+
+    // Format message
+    const messageText = animes.map((a, i) =>
+`⭐ *${i + 1}. ${a.title}*
+⭐ Score: ${a.score}
+📺 Episodes: ${a.episodes}
+
+${a.synopsis}`
+    ).join("\n\n");
+
+    const caption = `🎬 *Daily Anime Recommendations*\n\n${messageText}`;
+
+    // 🧪 FIRST RUN → SEND ONLY TO TEST GROUP
+    if (animeRecFirstRun) {
+
+      console.log("🧪 First run → sending only to test group");
+
+      await sock.sendMessage(TEST_GROUP_ID, {
+        image: { url: animes[0].image },
+        caption
+      }).catch(()=>{});
+
+      animeRecFirstRun = false;
+      return;
+    }
+
+    // ✅ NORMAL RUN → SEND TO GROUPS WITH animerec ON
+
+    const groups = Object.keys(groupCommandsCache).filter(
+      gid => groupCommandsCache[gid]?.animerec === "on"
+    );
+
+    console.log(`📢 Sending recommendations to ${groups.length} groups`);
+
+    for (const gid of groups) {
+
+      await sock.sendMessage(gid, {
+        image: { url: animes[0].image },
+        caption
+      }).catch(()=>{});
+
+      // Delay to avoid WhatsApp spam detection
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+  } catch (err) {
+    console.error("❌ Daily recommendation worker error:", err.message);
+  }
+}
+let manhwaRecFirstRun = true;
+async function fetchDailyManhwaRecommendation() {
+  try {
+
+    const randomPage = Math.floor(Math.random() * 200) + 1;
+
+    const { data } = await axios.get(
+      `https://comix.to/api/v2/manga?order[views_30d]=desc&genres[]=-87264&genres[]=-87266&genres[]=-87268&genres[]=-87265&genres_mode=and&limit=28&page=${randomPage}`,
+      { timeout: 20000 }
+    );
+
+    const items = data?.result?.items || [];
+
+    if (!items.length) return null;
+
+    // remove nsfw
+    const filtered = items.filter(m =>
+      !m.is_nsfw &&
+      m.poster?.large &&
+      m.synopsis
+    );
+
+    if (!filtered.length) return null;
+
+    const randomManhwa =
+      filtered[Math.floor(Math.random() * filtered.length)];
+
+    return {
+      id: randomManhwa.manga_id,
+      title: randomManhwa.title,
+      chapter: randomManhwa.latest_chapter,
+      rating: randomManhwa.rated_avg,
+      synopsis: randomManhwa.synopsis.slice(0, 160) + "...",
+      image: randomManhwa.poster.large
+    };
+
+  } catch (err) {
+    console.log("❌ Manhwa recommendation error:", err.message);
+    return null;
+  }
+}
+async function sendDailyManhwaRecommendation(sock) {
+  try {
+
+    console.log("📚 Generating daily manhwa recommendation...");
+
+    const manhwa = await fetchDailyManhwaRecommendation();
+    if (!manhwa) return;
+
+    const caption =
+`📚 *Manhwa Recommendation of the Day*
+
+🔥 *${manhwa.title}*
+⭐ Rating: ${manhwa.rating}
+📖 Latest Chapter: ${manhwa.chapter}
+
+${manhwa.synopsis}`;
+
+    // 🧪 FIRST RUN → SEND ONLY TO TEST GROUP
+    if (manhwaRecFirstRun) {
+
+      console.log("🧪 First run → sending only to test group");
+
+      await sock.sendMessage(TEST_GROUP_ID, {
+        image: { url: manhwa.image },
+        caption
+      }).catch(()=>{});
+
+      manhwaRecFirstRun = false;
+      return;
+    }
+
+    // ✅ NORMAL RUN → SEND TO GROUPS WITH manhwarec ON
+    const groups = Object.keys(groupCommandsCache).filter(
+      gid => groupCommandsCache[gid]?.manhwadaily === "on"
+    );
+
+    console.log(`📢 Sending manhwa recommendation to ${groups.length} groups`);
+
+    for (const gid of groups) {
+
+      await sock.sendMessage(gid, {
+        image: { url: manhwa.image },
+        caption
+      }).catch(()=>{});
+
+      // delay to avoid WhatsApp rate limit
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+  } catch (err) {
+    console.error("❌ Manhwa recommendation worker error:", err.message);
+  }
+}
+let wallpaperFirstRun = true;
+async function fetchDailyWallpapers() {
+  const wallpapers = [];
+
+  for (let i = 0; i < 3; i++) {
+
+    let page = Math.floor(Math.random() * 80) + 1;
+    let found = false;
+
+    while (page > 0 && !found) {
+      try {
+
+        const { data } = await axios.get(
+          `https://kiroflix.site/backend/get_wallpaper.php?anime_page=${page}`,
+          { timeout: 15000 }
+        );
+
+        if (data?.results?.length) {
+
+          const randomWallpaper =
+            data.results[Math.floor(Math.random() * data.results.length)];
+
+          wallpapers.push({
+            title: randomWallpaper.title,
+            image: randomWallpaper.wallpaper
+          });
+
+          found = true;
+        } else {
+          page--;
+        }
+
+      } catch (err) {
+        page--;
+      }
+
+      // delay to avoid backend spam
+      await new Promise(r => setTimeout(r, 1200));
+    }
+  }
+
+  return wallpapers;
+}
+async function sendDailyWallpapers(sock) {
+  try {
+
+    console.log("🌅 Generating daily wallpapers...");
+
+    const wallpapers = await fetchDailyWallpapers();
+    if (!wallpapers.length) return;
+
+    const caption =
+`🌅 *Daily Anime Wallpapers Pack*
+
+Enjoy today's wallpapers! ✨`;
+
+    // 🧪 FIRST RUN → TEST GROUP
+    if (wallpaperFirstRun) {
+
+      console.log("🧪 First wallpaper run → test group only");
+
+      for (const w of wallpapers) {
+
+        await sock.sendMessage(TEST_GROUP_ID, {
+          image: { url: w.image },
+          caption: `${caption}\n\n🖼 ${w.title}`
+        }).catch(()=>{});
+
+        await new Promise(r => setTimeout(r, 2500));
+      }
+
+      wallpaperFirstRun = false;
+      return;
+    }
+
+    // NORMAL RUN
+    const groups = Object.keys(groupCommandsCache).filter(
+      gid => groupCommandsCache[gid]?.wallpaperdaily === "on"
+    );
+
+    console.log(`📢 Sending wallpapers to ${groups.length} groups`);
+
+    for (const gid of groups) {
+
+      for (const w of wallpapers) {
+
+        await sock.sendMessage(gid, {
+          image: { url: w.image },
+          caption: `${caption}\n\n🖼 ${w.title}`
+        }).catch(()=>{});
+
+        await new Promise(r => setTimeout(r, 3000));
+      }
+
+      await new Promise(r => setTimeout(r, 4000));
+    }
+
+  } catch (err) {
+    console.error("❌ Daily wallpaper worker error:", err.message);
   }
 }
 // -------------------- UPDATE COMMAND STATUS --------------------
@@ -1496,16 +1950,362 @@ async function updateCommandStatus(groupId, adminId, command, action) {
     };
   }
 }
+const activeGames = {};
+const groupActivity = {};
+const lastGameTime = {};
+async function fetchTrendingAnime() {
 
-//
-// -------------------- GROUP COMMANDS LIST --------------------
-//
+  const query = `
+  query {
+    Page(page:1, perPage:10){
+      media(sort:TRENDING_DESC, type:ANIME){
+        title{
+          romaji
+          english
+        }
+        episodes
+        genres
+        description
+        characters(perPage:10){
+          nodes{
+            name{ full }
+          }
+        }
+      }
+    }
+  }`;
 
-const groupCommands = {
-  games: "🎮 Activate or deactivate group games (use: .games on/off)",
-  leaderboard: "🏆 Show group game leaderboard",
-  rules: "📜 Show group rules or info"
-};
+  const { data } = await axios.post(
+    "https://graphql.anilist.co",
+    { query }
+  );
+
+  return data?.data?.Page?.media || [];
+}
+async function generateGameQuestions(animeList) {
+
+const prompt = `
+Create an anime quiz game.
+
+Use this anime data:
+${JSON.stringify(animeList)}
+
+Rules:
+- generate 10 questions
+- include the correct answer
+- short questions
+- anime themed
+
+Return JSON format only:
+
+{
+ "questions":[
+   {
+     "question":"...",
+     "answer":"..."
+   }
+ ]
+}
+`;
+
+const result = await askAI(prompt);
+
+try {
+  const clean = result
+.replace(/```json/g,"")
+.replace(/```/g,"")
+.trim();
+
+return JSON.parse(clean);
+} catch {
+  return null;
+}
+
+}
+async function startAnimeGame(sock, groupId) {
+  if (activeGames[groupId]) return;
+
+  lastGameTime[groupId] = Date.now(); // ⭐ ADD THIS
+
+  groupActivity[groupId] = Date.now();
+
+  const anime = await fetchTrendingAnime();
+  if (!anime.length) return;
+
+  const game = await generateGameQuestions(anime);
+  if (!game) return;
+
+  activeGames[groupId] = {
+    questions: game.questions,
+    currentQuestion: 0,
+    scores: {},
+    answeredUsers: {}
+  };
+
+  sock.sendMessage(groupId,{
+    text:`🎮 *Anime Quiz Started!*
+
+10 Questions
+⏱ 30 second per question
+Reply with answers!
+
+Good luck!`
+  });
+
+  askNextQuestion(sock, groupId);
+}
+async function askNextQuestion(sock, groupId){
+
+  const game = activeGames[groupId];
+  if (!game) return;
+
+  if (game.currentQuestion >= game.questions.length){
+    return endGame(sock, groupId);
+  }
+
+  const q = game.questions[game.currentQuestion];
+
+  game.answeredUsers = {};
+
+  await sock.sendMessage(groupId,{
+    text:`❓ Question ${game.currentQuestion+1}/10
+
+${q.question}
+
+⏳ You have 30 second`
+  });
+
+  game.timer = setTimeout(()=>{
+    revealAnswer(sock, groupId);
+  }, 30000); // 30 seconds
+
+}
+async function revealAnswer(sock, groupId){
+
+  const game = activeGames[groupId];
+  const q = game.questions[game.currentQuestion];
+
+  await sock.sendMessage(groupId,{
+    text:`⏰ Time's up!
+
+Correct answer:
+*${q.answer}*`
+  });
+
+  game.currentQuestion++;
+
+  setTimeout(()=>{
+    askNextQuestion(sock, groupId);
+  }, 4000);
+}
+async function endGame(sock, groupId){
+
+  const game = activeGames[groupId];
+
+  let board = "🏆 *Final Scoreboard*\n\n";
+
+  const sorted = Object.entries(game.scores)
+  .sort((a,b)=>b[1]-a[1]);
+  if (sorted.length === 0) {
+  await sock.sendMessage(groupId,{
+    text:`🏁 Game finished!\n\nNobody scored this round 😅`
+  });
+
+  delete activeGames[groupId];
+  return;
+}
+
+  sorted.forEach(([user,score],i)=>{
+    board += `${i+1}. @${user.split("@")[0]} — ${score} pts\n`;
+  });
+
+  await sock.sendMessage(groupId,{
+  text: board,
+  mentions: sorted.map(([u]) => u)
+});
+
+  saveScores(groupId, game.scores);
+
+  delete activeGames[groupId];
+}
+async function saveScores(groupId, scores){
+
+  try {
+
+    await axios.post(
+      "https://kiroflix.site/backend/save_game_scores.php",
+      {
+        group_id: groupId,
+        scores: scores
+      },
+      { timeout: 10000 }
+    );
+
+  } catch (err) {
+    console.error("❌ Failed to save game scores:", err.message);
+  }
+
+}
+
+// Format: { [groupId]: { command: status, ... }, ... }
+async function fetchGroupsFromBackend() {
+  try {
+    const url = "https://kiroflix.site/backend/get_wa_groups.php";
+    const { data } = await axios.get(url);
+
+    if (data.success && data.data) {
+      data.data.forEach(group => {
+        // Initialize toggled commands with default "on"
+        const commands = {};
+        Object.keys(toggledCommands).forEach(cmd => (commands[cmd] = "on"));
+
+        // Override with backend status if available
+        if (group.commands && Array.isArray(group.commands)) {
+          group.commands.forEach(c => {
+            if (commands[c.command] !== undefined) {
+              commands[c.command] = c.status; // update only toggled commands
+            }
+          });
+        }
+
+        groupCommandsCache[group.group_id] = commands;
+      });
+    }
+  } catch (err) {
+    console.error("❌ Failed to fetch groups from backend:", err.message);
+  }
+}
+async function searchAnimeCharacter(name) {
+  try {
+    const { data } = await axios.get(
+      `https://api.jikan.moe/v4/characters?q=${encodeURIComponent(name)}&limit=10`
+    );
+
+    const characters = data?.data || [];
+    if (!characters.length) return null;
+
+    // 🔹 Compute a simple match score: exact match > partial match
+    function matchScore(charName, query) {
+      const lowerChar = charName.toLowerCase();
+      const lowerQuery = query.toLowerCase();
+
+      if (lowerChar === lowerQuery) return 100; // exact match
+      if (lowerChar.includes(lowerQuery)) return 50; // partial match
+      return 0;
+    }
+
+    // 🔹 Rank characters by match score and favorites
+    characters.sort((a, b) => {
+      const scoreA = matchScore(a.name, name) + (a.favorites || 0) / 100;
+      const scoreB = matchScore(b.name, name) + (b.favorites || 0) / 100;
+      return scoreB - scoreA; // descending
+    });
+
+    // 🔹 Pick the top-scoring character
+    const best = characters[0];
+
+    return {
+      name: best.name,
+      image: best.images?.jpg?.image_url,
+      anime: best.anime?.[0]?.anime?.title || "Unknown",
+      favorites: best.favorites || 0
+    };
+
+  } catch (err) {
+    console.log("❌ Character search error:", err.message);
+    return null;
+  }
+}
+// -------------------- ANTI-SPAM (Rapid & Repeated Detection) --------------------
+const userMessageCache = {}; // { groupId: { userId: [{content, type, timestamp}, ...] } }
+const SPAM_WARN_THRESHOLD = 3; // messages to warn
+const SPAM_KICK_THRESHOLD = 5; // messages to kick
+const SPAM_COOLDOWN = 8000; // 8 seconds window
+
+async function handleAntiSpam(sock, msg) {
+  const from = msg.key.remoteJid;
+  if (!from.endsWith("@g.us")) return; // only for groups
+
+  // ❌ Check if anti-spam is ON
+  if (groupCommandsCache[from]?.antispam !== "on") return;
+
+  const userId = msg.key.participant || msg.key.remoteJid;
+
+  // Skip if user is admin
+  const metadata = await sock.groupMetadata(from);
+  const isAdmin = metadata.participants.some(
+    p => p.id === userId && (p.admin === "admin" || p.admin === "superadmin")
+  );
+  if (isAdmin) return;
+
+  // Extract message content (string fallback for any type)
+  let content = "";
+  if (msg.message.conversation) content = msg.message.conversation;
+  else if (msg.message.extendedTextMessage?.text) content = msg.message.extendedTextMessage.text;
+  else if (msg.message.imageMessage?.caption) content = msg.message.imageMessage.caption || "<image>";
+  else if (msg.message.videoMessage?.caption) content = msg.message.videoMessage.caption || "<video>";
+  else if (msg.message.stickerMessage) content = "<sticker>";
+  else content = JSON.stringify(msg.message);
+
+  const type = Object.keys(msg.message)[0] || "unknown";
+
+  if (!userMessageCache[from]) userMessageCache[from] = {};
+  if (!userMessageCache[from][userId]) userMessageCache[from][userId] = [];
+
+  const now = Date.now();
+  // Push current message
+  userMessageCache[from][userId].push({ content, type, timestamp: now });
+
+  // Remove messages older than cooldown
+  userMessageCache[from][userId] = userMessageCache[from][userId].filter(
+    m => now - m.timestamp <= SPAM_COOLDOWN
+  );
+
+  const msgCount = userMessageCache[from][userId].length;
+
+  const admins = metadata.participants
+    .filter(p => p.admin === "admin" || p.admin === "superadmin")
+    .map(p => p.id);
+
+  // ✅ First warning
+  if (msgCount === SPAM_WARN_THRESHOLD) {
+    await sock.sendMessage(from, {
+      text: `⚠️ @${userId.split("@")[0]} Stop spamming! This is your warning.`,
+      mentions: [userId]
+    });
+    return;
+  }
+
+  // ✅ Kick for spam
+  if (msgCount >= SPAM_KICK_THRESHOLD) {
+    const botIsAdmin = metadata.participants.some(
+      p => p.id === sock.user.id && (p.admin === "admin" || p.admin === "superadmin")
+    );
+
+    if (botIsAdmin) {
+      await sock.groupParticipantsUpdate(from, [userId], "remove").catch(console.error);
+      await sock.sendMessage(from, {
+        text: `🚫 @${userId.split("@")[0]} was removed for spamming.`,
+        mentions: [userId]
+      });
+    } else {
+      await sock.sendMessage(from, {
+        text: `⚠️ @${userId.split("@")[0]} is spamming! Bot needs admin to remove.`,
+        mentions: [userId]
+      });
+    }
+
+    // Notify admins
+    await sock.sendMessage(from, {
+      text: `👮 Admins, please check spam behavior of @${userId.split("@")[0]}.`,
+      mentions: admins
+    });
+
+    // Clear user cache
+    userMessageCache[from][userId] = [];
+    return;
+  }
+}
 
 //
 // -------------------- GROUP MENU --------------------
@@ -1522,34 +2322,45 @@ async function sendGroupMenu(sock, from, sender) {
     // Only admins can see menu
     if (!adminIds.includes(sender)) return;
 
-    const menuText = Object.entries(groupCommands)
-      .map(([cmd, desc]) => `• .${cmd} → ${desc}`)
+    // 🔹 Toggled commands with status
+    const toggledText = Object.entries(toggledCommands)
+      .map(([cmd, desc]) => {
+        const status = groupCommandsCache[from]?.[cmd] || "on";
+        return `• *.${cmd}* → ${desc}  [*${status.toUpperCase()}*]`;
+      })
       .join("\n");
 
-    await sock.sendMessage(from, {
-      text:
-`📋 *Group Commands Menu*
+    // 🔹 Non-toggled commands
+    const nonToggledText = Object.entries(nonToggledCommands)
+      .map(([cmd, desc]) => `• *.${cmd}* → ${desc}`)
+      .join("\n");
 
-${menuText}
+    // Combine and style
+    const menuText =
+`📋 *Kiroflix Group Commands Menu*
 
-Example:
-.games on
-.games off`
-    });
+🎛️ *Toggled Commands* (on/off):
+${toggledText}
+
+📝 *Other Commands*:
+${nonToggledText}
+
+💡 *Example:*
+/kiroflix .games on
+/kiroflix .anime off`;
+
+    await sock.sendMessage(from, { text: menuText });
 
   } catch (err) {
     console.error("❌ Failed to send group menu:", err.message);
   }
 }
-
 //
 // -------------------- GROUP TOGGLE HANDLER --------------------
 //
 
 async function handleGroupToggle(sock, from, sender, text) {
-
   try {
-
     const metadata = await sock.groupMetadata(from);
 
     const adminIds = metadata.participants
@@ -1557,23 +2368,30 @@ async function handleGroupToggle(sock, from, sender, text) {
       .map(p => p.id);
 
     // ❌ Only admins allowed
-    if (!adminIds.includes(sender)) {
-      return false;
-    }
+    if (!adminIds.includes(sender)) return false;
 
-    // Example: ".games on"
-    const match = text.match(/^\.([a-zA-Z0-9_-]+)\s+(on|off)$/i);
+    // ❌ Only toggle if used with /kiroflix
+    if (!text.toLowerCase().startsWith("/kiroflix .")) return false;
+
+    // Example: "/kiroflix .games on"
+    const cmdText = text.replace(/^\/kiroflix\s+\./i, "").trim();
+    const match = cmdText.match(/^([a-zA-Z0-9_-]+)\s+(on|off)$/i);
     if (!match) return false;
 
     const [, commandRaw, actionRaw] = match;
-
     const command = commandRaw.toLowerCase();
     const action = actionRaw.toLowerCase();
 
-    // ❌ Ignore if command not in defined list
-    if (!groupCommands[command]) {
-      return false;
+    if (!toggledCommands[command]) return false;
+
+    // Initialize cache for group if missing
+    if (!groupCommandsCache[from]) {
+      groupCommandsCache[from] = {};
+      Object.keys(groupCommands).forEach(cmd => (groupCommandsCache[from][cmd] = "on"));
     }
+
+    // ✅ Update cache
+    groupCommandsCache[from][command] = action;
 
     // ✅ Update backend
     const result = await updateCommandStatus(from, sender, command, action);
@@ -1585,13 +2403,8 @@ async function handleGroupToggle(sock, from, sender, text) {
     return true;
 
   } catch (err) {
-
     console.error("❌ Failed to handle toggle:", err.message);
-
-    await sock.sendMessage(from, {
-      text: `⚠️ Error updating command`
-    });
-
+    await sock.sendMessage(from, { text: `⚠️ Error updating command` });
     return true;
   }
 }
@@ -1605,6 +2418,7 @@ async function startBot() {
     auth: state,
     browser: ["Kiroflix Bot", "Chrome", "1.0"]
   });
+  await fetchGroupsFromBackend();
 
   // 🟢 Connection events
   sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
@@ -1616,10 +2430,63 @@ async function startBot() {
     if (connection === "open") {
       console.log("✅ WhatsApp connected");
       qrCodeDataURL = null; // clear QR
-      // Run immediately on startup
-      // await checkNewEpisodes(sock);
-      // Then run every hour
-      // setInterval(() => checkNewEpisodes(sock), 3600000);
+      // 🔹 Run immediately on startup
+  checkNewEpisodes(sock);
+  checkNewChapters(sock);
+
+  // 🔹 Then run every hour
+  setInterval(() => checkNewEpisodes(sock), 3600000);
+  setInterval(() => checkNewChapters(sock), 3600000);
+    // 🧪 Run once on start
+  await sendDailyAnimeRecommendations(sock);
+
+  // ⏰ Run every 24 hours
+  setInterval(() => {
+    sendDailyAnimeRecommendations(sock);
+  }, 86400000);
+  // run once
+await sendDailyManhwaRecommendation(sock);
+
+// run every 24 hours
+setInterval(() => {
+  sendDailyManhwaRecommendation(sock);
+}, 86400000);
+// run once
+await sendDailyWallpapers(sock);
+
+// run every 24 hours
+setInterval(() => {
+  sendDailyWallpapers(sock);
+}, 86400000);
+// Example: start a test anime quiz game
+  console.log("🎮 Starting test game in TEST_GROUP_ID...");
+  startAnimeGame(sock, TEST_GROUP_ID);
+// 🎮 Group inactivity checker
+setInterval(async () => {
+
+  const now = Date.now();
+  
+
+  for (const groupId in groupActivity) {
+
+    const last = groupActivity[groupId];
+
+    const inactive = now - last > 1800000; // 30 min
+    if (Date.now() - (lastGameTime[groupId] || 0) < 7200000) continue; // 2h
+
+    if (!inactive) continue;
+
+    if (activeGames[groupId]) continue;
+
+    if (groupCommandsCache[groupId]?.games !== "on") continue;
+
+    console.log("🎮 Starting game in", groupId);
+
+    startAnimeGame(sock, groupId);
+
+  }
+
+}, 300000); // check every 5 minutes
     }
 
     if (connection === "close") {
@@ -1634,11 +2501,14 @@ async function startBot() {
   // 📨 Message listener
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
+    
     const msg = messages[0];
     if (!msg.message || msg.key.fromMe) return;
 
     const from = msg.key.remoteJid;
     const isGroup = from.endsWith("@g.us");
+    
+    
 
     // 📝 Extract text
     let text =
@@ -1649,6 +2519,120 @@ async function startBot() {
       "";
     if (!text) return;
     text = text.trim();
+    // update last activity time
+if (isGroup) {
+  try {
+    await handleAntiSpam(sock, msg);
+  } catch(e) {
+    console.error("Anti-spam error:", e);
+  }
+  groupActivity[from] = Date.now();
+  
+}
+// Helper function to get group admins
+async function getGroupAdmins(groupId) {
+  try {
+    const metadata = await sock.groupMetadata(groupId); // get group info
+    return metadata.participants
+      .filter(p => p.admin === "admin" || p.admin === "superadmin")
+      .map(p => p.id);
+  } catch (err) {
+    console.error("Failed to fetch group admins:", err);
+    return []; // return empty array if error
+  }
+}
+    // -------------------- COMMAND CHECK BEFORE HANDLER --------------------
+if (isGroup && text.toLowerCase().startsWith("/kiroflix")) {
+  // Extract command name after /kiroflix
+  const cmd = text.replace(/^\/kiroflix\s*/i, "").split(" ")[0].toLowerCase();
+
+  // List of commands that are not available yet
+  const upcomingCommands = [
+    ".antispam",
+    ".antiflood",
+    ".links",
+    ".welcome",
+    ".mute",
+    ".slowmode",
+    ".guessanime",
+    ".quiz",
+    ".kick",
+    ".ban",
+    ".leaderboard",
+    ".stats",
+    ".active",
+    ".settings",
+    ".reset",
+    ".watchparty"
+  ];
+
+  if (upcomingCommands.includes(cmd)) {
+    // Check if user is admin
+    const participant = msg.key.participant || from;
+    const groupAdmins = await getGroupAdmins(from); // implement this function
+    const isAdmin = groupAdmins.includes(participant);
+
+    if (isAdmin) {
+      await sock.sendMessage(from, {
+        text: `⚠️ The command *${cmd}* isn't available yet.\nNext updates will add it!`,
+        mentions: [participant]
+      });
+      return; // stop further processing
+    }
+  }
+}
+    // 🎮 Check if group game is running
+if (isGroup && activeGames[from]) {
+
+  const game = activeGames[from];
+  const user = msg.key.participant || msg.key.remoteJid;
+
+  const q = game.questions[game.currentQuestion];
+  if (!q) return;
+
+  // prevent multiple answers from same user
+  if (game.answeredUsers[user]) return;
+  const normalize = (t) => t.replace(/[^\w\s]/g,"").toLowerCase().trim();
+
+const userAnswer = normalize(text);
+const correct = normalize(q.answer);
+
+if (userAnswer === correct || userAnswer.includes(correct)) {
+
+    game.answeredUsers[user] = true;
+
+    game.scores[user] = (game.scores[user] || 0) + 1;
+
+    clearTimeout(game.timer);
+
+    await sock.sendMessage(from,{
+      text:`✅ Correct!
+
++1 point to @${user.split("@")[0]}`,
+      mentions:[user]
+    });
+
+    game.currentQuestion++;
+
+    setTimeout(()=>{
+      askNextQuestion(sock, from);
+    },2000);
+
+  }
+
+}
+    if (isGroup) {
+  // ✅ Check bot status
+  const botStatus = groupCommandsCache[from]?.bot || "on";
+
+  // ❌ Skip all messages if bot is OFF, except commands to toggle it
+  if (
+    botStatus === "off" &&
+    !text.toLowerCase().startsWith("/kiroflix .bot")
+  ) {
+    return; // ignore everything else
+  }
+}
     // ✅ Group menu command restricted to admins
 // -------------------- MESSAGE HANDLER --------------------
 if (isGroup) {
@@ -1662,6 +2646,74 @@ if (isGroup) {
   const handled = await handleGroupToggle(sock, from, msg.key.participant || from, text);
   if (handled) return;
 }
+ // 💖 WAIFU CLAIM
+if (isGroup && text.toLowerCase().startsWith("/kiroflix .waifu ")) {
+
+  // Check if waifu system is enabled
+  if (groupCommandsCache[from]?.waifu === "off") {
+    await sock.sendMessage(from, {
+      text: "❌ Waifu system is disabled in this group."
+    });
+    return;
+  }
+
+  const user = msg.key.participant || msg.key.remoteJid;
+
+  // 🔹 Extract full character name after "/kiroflix .waifu "
+  const characterName = text.slice(17).trim(); 
+  // 17 = length of "/kiroflix .waifu " including space
+
+  if (!characterName) {
+    await sock.sendMessage(from, {
+      text: "Usage:\n/kiroflix .waifu <character name>"
+    });
+    return;
+  }
+
+  // 🔹 Search character in anime database
+  const character = await searchAnimeCharacter(characterName);
+
+  if (!character) {
+    await sock.sendMessage(from, {
+      text: `❌ Character not found in anime database.`
+    });
+    return;
+  }
+
+  // 🔹 Initialize group claim storage
+  if (!waifuClaims[from]) {
+    waifuClaims[from] = {};
+  }
+
+  const key = character.name.toLowerCase().replace(/\s+/g, ""); 
+  // Normalize name for internal storage (ignore spaces/case)
+
+  // 🔹 Check if already claimed
+  if (waifuClaims[from][key]) {
+    const owner = waifuClaims[from][key];
+    await sock.sendMessage(from, {
+      text: `💔 *${character.name}* is already claimed by @${owner.split("@")[0]}`,
+      mentions: [owner]
+    });
+    return;
+  }
+
+  // 🔹 Claim character
+  waifuClaims[from][key] = user;
+
+  // 🔹 Send confirmation
+  await sock.sendMessage(from, {
+    image: { url: character.image },
+    caption: `💖 *@${user.split("@")[0]} claimed ${character.name}!*  
+
+Anime: ${character.anime}
+
+No one else can claim this waifu now.`,
+    mentions: [user]
+  });
+
+  return;
+}
 
     // ✅ Group commands
     if (isGroup) {
@@ -1673,6 +2725,7 @@ if (isGroup) {
         });
         return;
       }
+      
     } else {
       // ✅ Private chat max length
       if (text.length > MAX_MESSAGE_LENGTH) {
@@ -1682,6 +2735,7 @@ if (isGroup) {
         return;
       }
     }
+   
 
     // ✅ Handle the message
     await handleMessage(sock, {
