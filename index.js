@@ -1735,7 +1735,7 @@ async function fetchDailyManhwaRecommendation() {
     const randomPage = Math.floor(Math.random() * 200) + 1;
 
     const { data } = await axios.get(
-      `https://comix.to/api/v2/manga?order[views_30d]=desc&genres[]=-87264&genres[]=-87266&genres[]=-87268&genres[]=-87265&genres_mode=and&limit=28&page=${randomPage}`,
+      `https://kiroflix.site/backend/get_manhwa.php?page=${randomPage}`,
       { timeout: 20000 }
     );
 
