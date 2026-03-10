@@ -80,9 +80,9 @@ const toggledCommands = {
   links: "🔗 Block links (.links on/off)",
   welcome: "👋 Welcome message (.welcome on/off)",
   mute: "🔇 Mute the bot (.mute on/off)",
-  slowmode: "🐢 Enable slowmode (.slowmode 10s)"
+  slowmode: "🐢 Enable slowmode (.slowmode 10s)",
+  stickers: "🖌 Enable sticker maker (.stickers on/off)" // ✅ Added command
 };
-
 // -------------------- NON-TOGGLED COMMANDS --------------------
 const nonToggledCommands = {
   guessanime: "🎯 Anime guessing game (.guessanime start)",
@@ -2194,6 +2194,183 @@ async function endGame(sock, groupId){
 
   delete activeGames[groupId];
 }
+async function generateGuessAnime(animeList){
+
+const prompt = `
+Create a "Guess The Anime" game.
+
+Using this anime data:
+${JSON.stringify(animeList)}
+
+Rules:
+- Pick 5 anime
+- For each anime generate 3 clues
+- Do NOT reveal the anime name
+- clues must become progressively easier
+
+Return JSON ONLY:
+
+{
+ "rounds":[
+   {
+     "answer":"Anime Name",
+     "clues":[
+       "hard clue",
+       "medium clue",
+       "easy clue"
+     ]
+   }
+ ]
+}
+`;
+
+const result = await askAI(prompt);
+
+try{
+
+const clean = result
+.replace(/```json/g,"")
+.replace(/```/g,"")
+.trim();
+
+return JSON.parse(clean);
+
+}catch{
+return null;
+}
+
+}
+const guessAnimeGames = {};
+async function startGuessAnimeGame(sock, groupId){
+
+if (guessAnimeGames[groupId]) return;
+
+const anime = await fetchTrendingAnime();
+if (!anime.length) return;
+
+const game = await generateGuessAnime(anime);
+if (!game) return;
+
+guessAnimeGames[groupId] = {
+rounds: game.rounds,
+currentRound: 0,
+clueIndex: 0,
+scores:{}
+};
+
+await sock.sendMessage(groupId,{
+text:`🎮 *Guess The Anime!*
+
+I'll give clues about an anime.
+First person to guess wins!
+
+Get ready...`
+});
+
+nextGuessRound(sock,groupId);
+
+}
+async function nextGuessRound(sock,groupId){
+
+const game = guessAnimeGames[groupId];
+if (!game) return;
+
+if (game.currentRound >= game.rounds.length){
+
+return endGuessGame(sock,groupId);
+
+}
+
+game.clueIndex = 0;
+
+const round = game.rounds[game.currentRound];
+
+await sock.sendMessage(groupId,{
+text:`🎯 *Round ${game.currentRound+1}/5*
+
+Clue:
+${round.clues[0]}
+
+Reply with the anime name!`
+});
+
+game.timer = setTimeout(()=>{
+sendNextClue(sock,groupId);
+},15000);
+
+}
+async function sendNextClue(sock,groupId){
+
+const game = guessAnimeGames[groupId];
+if (!game) return;
+
+game.clueIndex++;
+
+const round = game.rounds[game.currentRound];
+
+if (game.clueIndex >= round.clues.length){
+
+await sock.sendMessage(groupId,{
+text:`⏰ Time's up!
+
+Answer:
+*${round.answer}*`
+});
+
+game.currentRound++;
+
+setTimeout(()=>{
+nextGuessRound(sock,groupId);
+},4000);
+
+return;
+
+}
+
+await sock.sendMessage(groupId,{
+text:`💡 Next clue:
+
+${round.clues[game.clueIndex]}`
+});
+
+game.timer = setTimeout(()=>{
+sendNextClue(sock,groupId);
+},15000);
+
+}
+async function endGuessGame(sock,groupId){
+
+const game = guessAnimeGames[groupId];
+if (!game) return;
+
+let board = "🏆 *Guess Anime Results*\n\n";
+
+const sorted = Object.entries(game.scores)
+.sort((a,b)=>b[1]-a[1]);
+
+if(sorted.length === 0){
+
+await sock.sendMessage(groupId,{
+text:"Nobody guessed correctly 😅"
+});
+
+delete guessAnimeGames[groupId];
+return;
+
+}
+
+sorted.forEach(([user,score],i)=>{
+board += `${i+1}. @${user.split("@")[0]} — ${score} pts\n`;
+});
+
+await sock.sendMessage(groupId,{
+text:board,
+mentions:sorted.map(([u])=>u)
+});
+
+delete guessAnimeGames[groupId];
+
+}
 async function saveScores(groupId, scores){
 
   try {
@@ -2212,6 +2389,7 @@ async function saveScores(groupId, scores){
   }
 
 }
+
 
 // Format: { [groupId]: { command: status, ... }, ... }
 async function fetchGroupsFromBackend() {
@@ -2342,11 +2520,16 @@ async function handleGroupProtection(sock, msg) {
 
     const userId = msg.key.participant || msg.key.remoteJid;
     const metadata = await getCachedGroupMetadata(sock, from);
-    if (!metadata) return; // skip if cannot get metadata
+    if (!metadata) return;
 
     // Skip admins & bot
-    if (metadata.participants.some(p => ["admin", "superadmin", "creator"].includes(p.admin) && p.id === userId)) return;
+    const participant = metadata.participants.find(p => p.id === userId);
+    if (!participant) return;
+    if (["admin", "superadmin", "creator"].includes(participant.admin)) return;
     if (userId === sock.user.id) return;
+
+    // Get sender name for mentions
+    const userName = participant?.name || userId.split("@")[0];
 
     // Extract message content
     let content = "";
@@ -2372,13 +2555,25 @@ async function handleGroupProtection(sock, msg) {
       const FLOOD_THRESHOLD = 5;   // 5 messages in 3s
       const recent = userMessageCache[from][userId].filter(m => now - m.timestamp <= FLOOD_COOLDOWN);
 
+      if (!participant.floodWarnings) participant.floodWarnings = 0;
+
       if (recent.length >= FLOOD_THRESHOLD) {
-        try {
-          await sock.groupParticipantsUpdate(from, [userId], "remove");
-          await sock.sendMessage(from, { text: `🚫 @${userId.split("@")[0]} removed for flooding.`, mentions: [userId] });
-        } catch {
-          if (admins.length) await sock.sendMessage(from, { text: `⚠️ @${userId.split("@")[0]} is flooding! Admins, take action.`, mentions: admins });
+        participant.floodWarnings += 1;
+
+        if (participant.floodWarnings < 3) {
+          await sock.sendMessage(from, {
+            text: `⚠️ ${userName}, stop flooding! Warning ${participant.floodWarnings}/3.`,
+          });
+        } else {
+          try {
+            await sock.groupParticipantsUpdate(from, [userId], "remove");
+            await sock.sendMessage(from, { text: `🚫 ${userName} removed for flooding.` });
+          } catch {
+            if (admins.length) await sock.sendMessage(from, { text: `⚠️ ${userName} is flooding! Admins, take action.`, mentions: admins });
+          }
+          participant.floodWarnings = 0; // reset
         }
+
         userMessageCache[from][userId] = [];
         return;
       }
@@ -2387,19 +2582,15 @@ async function handleGroupProtection(sock, msg) {
     // ------------------- ANTI-SPAM -------------------
     if (groupCommandsCache[from]?.antispam === "on") {
       const SPAM_COOLDOWN = 60_000; // 1 min
-      const SPAM_WARN = 3;
-      const SPAM_KICK = 5;
       const recent = userMessageCache[from][userId].filter(m => now - m.timestamp <= SPAM_COOLDOWN);
       const repeatCount = recent.filter(m => m.content === content).length;
 
-      if (repeatCount === SPAM_WARN) {
-        await sock.sendMessage(from, { text: `⚠️ @${userId.split("@")[0]} Stop spamming! This is your warning.`, mentions: [userId] });
-      } else if (repeatCount >= SPAM_KICK) {
+      if (repeatCount >= 1) { // 1 attempt only
         try {
           await sock.groupParticipantsUpdate(from, [userId], "remove");
-          await sock.sendMessage(from, { text: `🚫 @${userId.split("@")[0]} removed for spamming.`, mentions: [userId] });
+          await sock.sendMessage(from, { text: `🚫 ${userName} removed for spamming.` });
         } catch {
-          if (admins.length) await sock.sendMessage(from, { text: `⚠️ @${userId.split("@")[0]} is spamming! Admins, take action.`, mentions: admins });
+          if (admins.length) await sock.sendMessage(from, { text: `⚠️ ${userName} is spamming! Admins, take action.`, mentions: admins });
         }
         userMessageCache[from][userId] = [];
         return;
@@ -2407,23 +2598,38 @@ async function handleGroupProtection(sock, msg) {
     }
 
     // ------------------- LINK BLOCKING -------------------
-    if (groupCommandsCache[from]?.links === "on") {
-      const urlRegex = /(https?:\/\/[^\s]+)/gi;
-      if (urlRegex.test(content)) {
-        try {
-          await sock.groupParticipantsUpdate(from, [userId], "remove");
-          await sock.sendMessage(from, { text: `🚫 @${userId.split("@")[0]} removed for sending links.`, mentions: [userId] });
-        } catch {
-          if (admins.length) await sock.sendMessage(from, { text: `⚠️ @${userId.split("@")[0]} sent a link! Admins, take action.`, mentions: admins });
-        }
-        userMessageCache[from][userId] = [];
-        return;
-      }
+    // ------------------- LINK BLOCKING -------------------
+if (groupCommandsCache[from]?.links === "on") {
+  const urlRegex = /(https?:\/\/[^\s]+)/gi;
+  const recent = userMessageCache[from][userId].filter(m => now - m.timestamp <= 60_000); // 1 min window
+  const linkCount = recent.filter(m => urlRegex.test(m.content)).length;
+
+  if (urlRegex.test(content)) {
+    try {
+      // Delete the message containing the link
+      await sock.sendMessage(from, { delete: msg.key });
+      await sock.sendMessage(from, { text: `⚠️ ${userName}, sending links is not allowed! Message deleted.` });
+    } catch {
+      if (admins.length) await sock.sendMessage(from, { text: `⚠️ ${userName} sent a link! Admins, take action.`, mentions: admins });
     }
+    return; // stop further processing
+  }
+
+  // If user sends more than 3 links in 1 min, remove
+  if (linkCount >= 3) {
+    try {
+      await sock.groupParticipantsUpdate(from, [userId], "remove");
+      await sock.sendMessage(from, { text: `🚫 ${userName} removed for sending too many links.` });
+    } catch {
+      if (admins.length) await sock.sendMessage(from, { text: `⚠️ ${userName} sent multiple links! Admins, take action.`, mentions: admins });
+    }
+    userMessageCache[from][userId] = [];
+    return;
+  }
+}
 
   } catch (err) {
     console.error("❌ handleGroupProtection error:", err.message);
-    // Do not throw, just log and continue
   }
 }
 //
@@ -2533,6 +2739,207 @@ async function handleGroupToggle(sock, from, sender, text) {
     return true;
   }
 }
+
+// 🚫 Banned users cache
+// { groupId: [userId1, userId2] }
+let bannedUsers = {};
+
+const BACKEND_URL = "https://kiroflix.site/backend/";
+async function fetchBannedUsers() {
+  try {
+    const res = await fetch(`${BACKEND_URL}getBannedUsers.php`);
+    const data = await res.json();
+
+    if (data.success) {
+      bannedUsers = data.data || {};
+      console.log("🚫 Banned users loaded:", bannedUsers);
+    }
+
+  } catch (err) {
+    console.error("❌ Failed to fetch banned users:", err);
+  }
+}
+function isUserBanned(groupId, userId) {
+  if (!bannedUsers[groupId]) return false;
+  return bannedUsers[groupId].includes(userId);
+}
+function addLocalBan(groupId, userId) {
+
+  if (!bannedUsers[groupId]) {
+    bannedUsers[groupId] = [];
+  }
+
+  if (!bannedUsers[groupId].includes(userId)) {
+    bannedUsers[groupId].push(userId);
+  }
+
+}
+async function saveBanToBackend(groupId, userId) {
+
+  try {
+
+    await fetch(`${BACKEND_URL}addBannedUser.php`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        group_id: groupId,
+        user_id: userId
+      })
+    });
+
+  } catch (err) {
+    console.error("❌ Failed to save ban:", err);
+  }
+
+}
+// Admin cache
+const adminCache = {};
+const ADMIN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function getGroupAdmins(sock, groupId) {
+  try {
+
+    const now = Date.now();
+
+    // Return cached admins if still valid
+    if (
+      adminCache[groupId] &&
+      now - adminCache[groupId].timestamp < ADMIN_CACHE_TTL
+    ) {
+      return adminCache[groupId].admins;
+    }
+
+    // Fetch fresh metadata
+    const metadata = await sock.groupMetadata(groupId);
+
+    const admins = metadata.participants
+      .filter(p => p.admin === "admin" || p.admin === "superadmin")
+      .map(p => p.id);
+
+    // Save to cache
+    adminCache[groupId] = {
+      admins,
+      timestamp: now
+    };
+
+    return admins;
+
+  } catch (err) {
+
+    console.error("❌ Failed to fetch group admins:", err);
+
+    // fallback to cached admins if available
+    if (adminCache[groupId]) {
+      return adminCache[groupId].admins;
+    }
+
+    return [];
+  }
+}
+async function handleBanCommand(sock, msg, text) {
+
+  const from = msg.key.remoteJid;
+  const sender = msg.key.participant || msg.key.remoteJid;
+
+  const admins = await getGroupAdmins(sock, from);
+
+  if (!admins.includes(sender)) {
+
+    await sock.sendMessage(from, {
+      text: "❌ Only group admins can use .ban",
+      mentions: [sender]
+    });
+
+    return true;
+  }
+
+  const mentions =
+    msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+
+  if (!mentions.length) {
+
+    await sock.sendMessage(from, {
+      text: "❌ Mention a user to ban\nExample:\n/kiroflix .ban @user",
+      mentions: [sender]
+    });
+
+    return true;
+  }
+
+  for (const userId of mentions) {
+
+    if (admins.includes(userId)) {
+
+      await sock.sendMessage(from, {
+        text: "⚠️ Cannot ban an admin."
+      });
+
+      continue;
+    }
+
+    addLocalBan(from, userId);
+
+    await saveBanToBackend(from, userId);
+
+    await sock.sendMessage(from, {
+      text: `🚫 @${userId.split("@")[0]} is banned from using the bot.`,
+      mentions: [userId]
+    });
+
+  }
+
+  return true;
+
+}
+async function getLeaderboard(groupId) {
+
+  try {
+
+    const res = await fetch(
+      "https://kiroflix.site/backend/getLeaderboard.php",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ group_id: groupId })
+      }
+    );
+
+    const data = await res.json();
+
+    if (!data.success) return [];
+
+    return data.data;
+
+  } catch (err) {
+
+    console.error("Leaderboard error:", err);
+    return [];
+
+  }
+
+}
+const welcomeCache = {};
+async function fetchWelcomeMessages(){
+
+try{
+
+const {data} = await axios.get(
+"https://kiroflix.site/backend/get_welcome.php"
+);
+
+if(!data.success) return;
+
+data.data.forEach(g=>{
+welcomeCache[g.group_id] = g.welcome_text;
+});
+
+}catch(e){
+console.log("Failed to load welcome messages");
+}
+
+}
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
@@ -2554,6 +2961,7 @@ async function startBot() {
 
     if (connection === "open") {
       console.log("✅ WhatsApp connected");
+      await fetchBannedUsers();
       qrCodeDataURL = null; // clear QR
       // 🔹 Run immediately on startup
   checkNewEpisodes(sock);
@@ -2624,6 +3032,53 @@ setInterval(async () => {
   });
 
   sock.ev.on("creds.update", saveCreds);
+  sock.ev.on("group-participants.update", async (update)=>{
+
+const groupId = update.id;
+
+if(update.action !== "add") return;
+
+for(const user of update.participants){
+
+const template = welcomeCache[groupId];
+
+if(!template) return;
+
+const username = user.split("@")[0];
+
+const message = template.replace(
+"{user}",
+`✦「 @${username} 」`
+);
+
+let profilePic;
+
+try{
+profilePic = await sock.profilePictureUrl(user,"image");
+}catch{
+profilePic = null;
+}
+
+if(profilePic){
+
+await sock.sendMessage(groupId,{
+image:{url:profilePic},
+caption:message,
+mentions:[user]
+});
+
+}else{
+
+await sock.sendMessage(groupId,{
+text:message,
+mentions:[user]
+});
+
+}
+
+}
+
+});
 
   // 📨 Message listener
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
@@ -2634,7 +3089,16 @@ setInterval(async () => {
 
     const from = msg.key.remoteJid;
     const isGroup = from.endsWith("@g.us");
+    const userId = msg.key.participant || msg.key.remoteJid;
+    // 🚫 Skip banned users
+if (isGroup && isUserBanned(from, userId)) {
+
+  console.log(`🚫 Ignoring banned user ${userId}`);
+
+  return;
+}
     
+
     
 
     // 📝 Extract text
@@ -2646,6 +3110,42 @@ setInterval(async () => {
       "";
     if (!text) return;
     text = text.trim();
+    if(isGroup && guessAnimeGames[from]){
+
+const game = guessAnimeGames[from];
+const round = game.rounds[game.currentRound];
+const user = msg.key.participant || msg.key.remoteJid;
+
+if(!round) return;
+
+const guess = text.toLowerCase().trim();
+const answer = round.answer.toLowerCase();
+
+if(guess.includes(answer)){
+
+clearTimeout(game.timer);
+
+game.scores[user] = (game.scores[user] || 0) + 1;
+
+await sock.sendMessage(from,{
+text:`🎉 Correct!
+
+@${user.split("@")[0]} guessed it!
+
+Anime:
+*${round.answer}*`,
+mentions:[user]
+});
+
+game.currentRound++;
+
+setTimeout(()=>{
+nextGuessRound(sock,from);
+},4000);
+
+}
+
+}
     
     // update last activity time
 if (isGroup) {
@@ -2657,18 +3157,7 @@ if (isGroup) {
   groupActivity[from] = Date.now();
   
 }
-// Helper function to get group admins
-async function getGroupAdmins(groupId) {
-  try {
-    const metadata = await sock.groupMetadata(groupId); // get group info
-    return metadata.participants
-      .filter(p => p.admin === "admin" || p.admin === "superadmin")
-      .map(p => p.id);
-  } catch (err) {
-    console.error("Failed to fetch group admins:", err);
-    return []; // return empty array if error
-  }
-}
+
     // -------------------- COMMAND CHECK BEFORE HANDLER --------------------
 if (isGroup && text.toLowerCase().startsWith("/kiroflix")) {
   // Extract command name after /kiroflix
@@ -2676,13 +3165,8 @@ if (isGroup && text.toLowerCase().startsWith("/kiroflix")) {
 
   // List of commands that are not available yet
   const upcomingCommands = [
-    ".welcome",
     ".mute",
     ".slowmode",
-    ".guessanime",
-    ".kick",
-    ".ban",
-    ".leaderboard",
     ".stats",
     ".active",
     ".settings",
@@ -2693,7 +3177,7 @@ if (isGroup && text.toLowerCase().startsWith("/kiroflix")) {
   if (upcomingCommands.includes(cmd)) {
     // Check if user is admin
     const participant = msg.key.participant || from;
-    const groupAdmins = await getGroupAdmins(from); // implement this function
+    const groupAdmins = await getGroupAdmins(sock, from);
     const isAdmin = groupAdmins.includes(participant);
 
     if (isAdmin) {
@@ -2742,6 +3226,44 @@ if (isGroup) {
   // 2️⃣ Toggle commands like ".games on/off"
   const handled = await handleGroupToggle(sock, from, msg.key.participant || from, text);
   if (handled) return;
+}
+
+if (isGroup && text.toLowerCase().startsWith("/kiroflix .ban")) {
+
+  const handled = await handleBanCommand(sock, msg, text);
+
+  if (handled) return;
+
+}
+if (isGroup && text.toLowerCase() === "/kiroflix .leaderboard") {
+
+  const leaderboard = await getLeaderboard(from);
+
+  if (!leaderboard.length) {
+
+    await sock.sendMessage(from,{
+      text:"🏆 No scores yet in this group."
+    });
+
+    return;
+  }
+
+  let message = "🏆 *Group Leaderboard*\n\n";
+
+  leaderboard.forEach((user, index) => {
+
+    const username = user.user_id.split("@")[0];
+
+    message += `${index + 1}. @${username} — ${user.score} pts\n`;
+
+  });
+
+  await sock.sendMessage(from,{
+    text: message,
+    mentions: leaderboard.map(u => u.user_id)
+  });
+
+  return;
 }
  // 💖 WAIFU CLAIM
 if (isGroup && text.toLowerCase().startsWith("/kiroflix .waifu ")) {
@@ -2811,17 +3333,128 @@ No one else can claim this waifu now.`,
 
   return;
 }
+// -------------------- KICK COMMAND --------------------
+if (isGroup && text.toLowerCase().startsWith("/kiroflix .kick ")) {
+  const sender = msg.key.participant || msg.key.remoteJid;
+
+  // 1️⃣ Only admins can use
+  const admins = await getGroupAdmins(sock, from);
+  if (!admins.includes(sender)) {
+    await sock.sendMessage(from, {
+      text: "❌ Only group admins can use this command.",
+      mentions: [sender]
+    });
+    return;
+  }
+
+  // 2️⃣ Extract mentioned user(s)
+  const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+  if (mentions.length === 0) {
+    await sock.sendMessage(from, {
+      text: "❌ You must mention a user to kick. Example:\n/kiroflix .kick @user",
+      mentions: [sender]
+    });
+    return;
+  }
+
+  // 3️⃣ Attempt to kick each mentioned user
+  for (const userId of mentions) {
+    try {
+      await sock.groupParticipantsUpdate(from, [userId], "remove");
+      const userName = metadata.participants.find(p => p.id === userId)?.name || userId.split("@")[0];
+      await sock.sendMessage(from, { text: `🚫 ${userName} has been kicked from the group.` });
+    } catch (err) {
+      // If bot is not admin
+      await sock.sendMessage(from, {
+        text: `⚠️ Cannot remove <@${userId.split("@")[0]}>. Make sure the bot is an admin!`,
+        mentions: [userId]
+      });
+    }
+  }
+  return;
+}
 
     // ✅ Group commands
     if (isGroup) {
       if (!text.toLowerCase().startsWith("/kiroflix")) return;
       text = text.replace(/^\/kiroflix/i, "").trim();
+      if(isGroup && text.startsWith(".welcome edit")){
+
+const sender = msg.key.participant || msg.key.remoteJid;
+const admins = await getGroupAdmins(sock,from);
+
+if(!admins.includes(sender)){
+await sock.sendMessage(from,{text:"❌ Only admins can edit welcome message"});
+return;
+}
+
+const template = text.replace(".welcome edit","").trim();
+
+if(!template){
+
+await sock.sendMessage(from,{
+text:`📝 Welcome Editor
+
+Use {user} where the member mention should appear.
+
+Example:
+
+✨ Welcome to the group ✨
+
+Member: {user}
+
+Rules:
+1. Respect everyone
+2. No spam
+3. Stay on topic`
+});
+
+return;
+}
+
+await axios.post(
+"https://kiroflix.site/backend/update_welcome.php",
+{
+group_id:from,
+admin_id:sender,
+welcome_text:template
+}
+);
+
+welcomeCache[from] = template;
+
+await sock.sendMessage(from,{
+text:"✅ Welcome message updated."
+});
+
+}
+      if (isGroup && text.toLowerCase() === ".guessanime") {
+
+if (activeGames[from] || guessAnimeGames[from]) {
+
+await sock.sendMessage(from,{
+text:"⚠️ A game is already running."
+});
+
+return;
+
+}
+
+await sock.sendMessage(from,{
+text:"🎮 Starting Guess The Anime..."
+});
+
+startGuessAnimeGame(sock,from);
+
+return;
+
+}
       // 🎮 Manual quiz start by admin
 if (isGroup && text.toLowerCase() === ".quiz start") {
 
   const user = msg.key.participant || msg.key.remoteJid;
 
-  const admins = await getGroupAdmins(from);
+  const admins = await getGroupAdmins(sock, from);
   const isAdmin = admins.includes(user);
 
   if (!isAdmin) {
@@ -2880,7 +3513,7 @@ if (isGroup && text.toLowerCase() === ".quiz start") {
 if (isGroup && text.toLowerCase() === ".quiz stop") {
 
   const user = msg.key.participant || msg.key.remoteJid;
-  const admins = await getGroupAdmins(from);
+  const admins = await getGroupAdmins(sock, from);
 
   if (!admins.includes(user)) {
     await sock.sendMessage(from,{
