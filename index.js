@@ -4,7 +4,8 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
-  DisconnectReason
+  DisconnectReason,
+  downloadContentFromMessage   // <-- add this line
 } = require("@whiskeysockets/baileys");
 
 const axios = require("axios");
@@ -81,7 +82,8 @@ const toggledCommands = {
   welcome: "👋 Welcome message (.welcome on/off)",
   mute: "🔇 Mute the bot (.mute on/off)",
   slowmode: "🐢 Enable slowmode (.slowmode 10s)",
-  stickers: "🖌 Enable sticker maker (.stickers on/off)" // ✅ Added command
+  stickers: "🖌 Enable sticker maker (.stickers on/off)",
+  salutation: "📩 Send farewell message when member leaves (.salutation on/off)" // ✅ Added command
 };
 // -------------------- NON-TOGGLED COMMANDS --------------------
 const nonToggledCommands = {
@@ -1614,60 +1616,63 @@ const waifuClaims = {};
 let animeRecFirstRun = true;
 const TEST_GROUP_ID = "120363424824974989@g.us";
 async function fetchAnimeRecommendations() {
+
   const recommendations = [];
+  const allowedTypes = ["tv", "movie", "ova", "ona"];
 
   for (let i = 0; i < 5; i++) {
-    let page = Math.floor(Math.random() * 1200) + 1; // random page 1-1200
-    let anime = null;
 
-    while (page > 0 && !anime) {
-      try {
-        const { data } = await axios.get(
-          `https://api.jikan.moe/v4/anime?page=${page}&limit=25`
-        );
+    try {
 
-        if (!data?.data?.length) {
-          page--; // no results, try lower page
-          continue;
+      // random page from popular anime
+      const page = Math.floor(Math.random() * 10) + 1;
+
+      const { data } = await axios.get(
+        `https://api.jikan.moe/v4/anime`,
+        {
+          params: {
+            page: page,
+            limit: 25,
+            order_by: "popularity",
+            sort: "asc",
+            min_score: 7
+          }
         }
+      );
 
-        const filtered = data.data.filter(a =>
-          a.score &&
-          a.synopsis &&
-          a.images?.jpg?.large_image_url &&
-          a.rating &&
-          !["Rx", "Hentai", "Ecchi"].includes(a.rating)
-        );
+      if (!data?.data?.length) continue;
 
-        if (filtered.length) {
-          // pick a random anime from this page
-          anime = filtered[Math.floor(Math.random() * filtered.length)];
-        } else {
-          page--; // no valid anime, try lower page
-        }
+      // filter good anime
+      const filtered = data.data.filter(a =>
+        allowedTypes.includes(a.type?.toLowerCase()) &&
+        a.score >= 5 &&
+        a.synopsis &&
+        a.images?.jpg?.large_image_url &&
+        a.rating &&
+        !["Rx", "Hentai", "Ecchi"].includes(a.rating)
+      );
 
-      } catch (err) {
-        console.error(`❌ Error fetching page ${page}:`, err.message);
-        page--; // try lower page if request fails
-      }
+      if (!filtered.length) continue;
 
-      // 🔹 Delay 2 seconds between retries/fetches to avoid 409
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
+      const anime = filtered[Math.floor(Math.random() * filtered.length)];
 
-    if (anime) {
       recommendations.push({
         title: anime.title,
         score: anime.score,
         episodes: anime.episodes || "?",
-        synopsis: anime.synopsis.slice(0, 120) + "...",
+        synopsis: anime.synopsis.slice(0, 150) + "...",
         image: anime.images.jpg.large_image_url,
         url: anime.url
       });
+
+      // delay to avoid rate limit
+      await new Promise(r => setTimeout(r, 1500));
+
+    } catch (err) {
+      console.error("❌ Anime fetch error:", err.message);
+      await new Promise(r => setTimeout(r, 2000));
     }
 
-    // 🔹 Delay 2-3 seconds before fetching next page to be safe
-    await new Promise(resolve => setTimeout(resolve, 2500));
   }
 
   return recommendations;
@@ -2940,6 +2945,153 @@ console.log("Failed to load welcome messages");
 }
 
 }
+async function imageToWebp(buffer, outputPath) {
+  console.log("🧠 Converting image to WebP...");
+
+  await sharp(buffer)
+    .resize(512, 512, { fit: "inside" })
+    .webp({ quality: 100 })
+    .toFile(outputPath);
+
+  console.log("✅ Sticker saved:", outputPath);
+}
+// 📊 Message stats cache
+const messageStats = {};
+const messageFloodGuard = {};
+function logMessageStat(groupId, userId) {
+
+  const now = Date.now();
+
+  // Flood guard
+  if (!messageFloodGuard[userId]) {
+    messageFloodGuard[userId] = [];
+  }
+
+  // remove old timestamps (5s window)
+  messageFloodGuard[userId] =
+    messageFloodGuard[userId].filter(t => now - t < 5000);
+
+  // if too many messages in short time → ignore
+  if (messageFloodGuard[userId].length >= 4) {
+    return;
+  }
+
+  messageFloodGuard[userId].push(now);
+
+  if (!messageStats[groupId]) {
+    messageStats[groupId] = {
+      total: 0,
+      users: {}
+    };
+  }
+
+  messageStats[groupId].total++;
+
+  if (!messageStats[groupId].users[userId]) {
+    messageStats[groupId].users[userId] = 0;
+  }
+
+  messageStats[groupId].users[userId]++;
+}
+async function pushStatsToBackend() {
+
+  try {
+
+    const payload = [];
+
+    for (const groupId in messageStats) {
+
+      for (const userId in messageStats[groupId].users) {
+
+        payload.push({
+          group_id: groupId,
+          user_id: userId,
+          messages: messageStats[groupId].users[userId]
+        });
+
+      }
+
+    }
+
+    if (!payload.length) return;
+
+    await axios.post(
+      "https://kiroflix.site/backend/save_message_stats.php",
+      { stats: payload }
+    );
+
+    console.log(`📊 Pushed ${payload.length} stats to backend`);
+
+    // reset cache after sending
+    for (const groupId in messageStats) {
+      messageStats[groupId].users = {};
+    }
+
+  } catch (err) {
+
+    console.error("❌ Failed to push message stats:", err.message);
+
+  }
+}
+async function fetchMessageStats() {
+
+  try {
+
+    const res = await axios.get(
+      "https://kiroflix.site/backend/get_message_stats.php"
+    );
+
+    if (!res.data.success) return;
+
+    for (const row of res.data.data) {
+
+      const { group_id, user_id, messages } = row;
+
+      if (!messageStats[group_id]) {
+        messageStats[group_id] = {
+          total: 0,
+          users: {}
+        };
+      }
+
+      messageStats[group_id].users[user_id] = messages;
+
+      messageStats[group_id].total += messages;
+    }
+
+    console.log("📊 Message stats loaded");
+
+  } catch (err) {
+
+    console.error("❌ Failed to load message stats:", err.message);
+
+  }
+}
+const goodbyeCache = {}; // groupId -> message template
+const pendingFarewellConfirm = {}; // groupId -> { user }
+async function fetchFarewellMessages() {
+  try {
+    const res = await axios.get(
+      "https://kiroflix.site/backend/get_salutations.php"
+    );
+
+    const rows = res.data?.data; // <- access the 'data' array from your JSON
+
+    if (!Array.isArray(rows)) {
+      console.error("❌ Invalid farewell messages response:", res.data);
+      return;
+    }
+
+    rows.forEach(row => {
+      goodbyeCache[row.group_id] = row.salutation_text;
+    });
+
+    console.log("👋 Farewell messages loaded:", Object.keys(goodbyeCache).length);
+
+  } catch (err) {
+    console.error("❌ Failed loading farewell messages", err);
+  }
+}
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
@@ -2961,8 +3113,13 @@ async function startBot() {
 
     if (connection === "open") {
       console.log("✅ WhatsApp connected");
-      await fetchBannedUsers();
       qrCodeDataURL = null; // clear QR
+      await fetchBannedUsers();
+      await fetchWelcomeMessages();
+      await fetchMessageStats();
+      await fetchFarewellMessages(); // 👈 add this
+
+setInterval(pushStatsToBackend, 120000); // 5 minutes
       // 🔹 Run immediately on startup
   checkNewEpisodes(sock);
   checkNewChapters(sock);
@@ -3032,52 +3189,56 @@ setInterval(async () => {
   });
 
   sock.ev.on("creds.update", saveCreds);
-  sock.ev.on("group-participants.update", async (update)=>{
+  // -------------------- WELCOME NEW MEMBERS --------------------
+sock.ev.on("group-participants.update", async (update) => {
+  const groupId = update.id;
 
-const groupId = update.id;
+  try {
+    // -------------------- WELCOME --------------------
+    if (["add","invite"].includes(update.action)) {
+      const template = welcomeCache[groupId];
+      if (!template) return;
+      for (const participant of update.participants) {
+        const userJid = typeof participant === "string" ? participant : participant?.id;
+        if (!userJid) continue;
+        const username = userJid.split("@")[0];
+        const message = template.replace("{user}", `✦「 @${username} 」`);
 
-if(update.action !== "add") return;
+        try {
+          const profilePic = await sock.profilePictureUrl(userJid, "image");
+          await sock.sendMessage(groupId, { image:{url:profilePic}, caption: message, mentions:[userJid] });
+        } catch {
+          await sock.sendMessage(groupId, { text: message, mentions:[userJid] });
+        }
+      }
+    }
 
-for(const user of update.participants){
+    // -------------------- FAREWELL --------------------
+    if (["remove","leave"].includes(update.action)) {
+      const template = goodbyeCache[groupId];
+      if (!template) {
+        console.log(`⚠️ No farewell template set for group ${groupId}`);
+        return;
+      }
 
-const template = welcomeCache[groupId];
+      for (const participant of update.participants) {
+        const userJid = typeof participant === "string" ? participant : participant?.id;
+        if (!userJid) continue;
+        const username = userJid.split("@")[0];
+        const message = template.replace("{user}", `✦「 @${username} 」`);
 
-if(!template) return;
+        // send message privately to the user
+        await sock.sendMessage(userJid, {
+          text: message
+        });
 
-const username = user.split("@")[0];
+        console.log(`👋 Farewell sent privately to ${username}`);
+      }
+    }
 
-const message = template.replace(
-"{user}",
-`✦「 @${username} 」`
-);
-
-let profilePic;
-
-try{
-profilePic = await sock.profilePictureUrl(user,"image");
-}catch{
-profilePic = null;
-}
-
-if(profilePic){
-
-await sock.sendMessage(groupId,{
-image:{url:profilePic},
-caption:message,
-mentions:[user]
-});
-
-}else{
-
-await sock.sendMessage(groupId,{
-text:message,
-mentions:[user]
-});
-
-}
-
-}
-
+  } catch (err) {
+    console.error("❌ Group participants handler error:", err);
+  }
 });
 
   // 📨 Message listener
@@ -3154,8 +3315,10 @@ if (isGroup) {
   } catch(e) {
     console.error("Anti-spam error:", e);
   }
+
   groupActivity[from] = Date.now();
-  
+
+  logMessageStat(from, userId);
 }
 
     // -------------------- COMMAND CHECK BEFORE HANDLER --------------------
@@ -3167,8 +3330,6 @@ if (isGroup && text.toLowerCase().startsWith("/kiroflix")) {
   const upcomingCommands = [
     ".mute",
     ".slowmode",
-    ".stats",
-    ".active",
     ".settings",
     ".reset",
     ".watchparty"
@@ -3227,13 +3388,108 @@ if (isGroup) {
   const handled = await handleGroupToggle(sock, from, msg.key.participant || from, text);
   if (handled) return;
 }
+// -------------------- ADMIN CONFIRM FAREWELL --------------------
+if (isGroup && text.toLowerCase() === "yes") {
 
-if (isGroup && text.toLowerCase().startsWith("/kiroflix .ban")) {
+  const pending = pendingFarewellConfirm[from];
 
-  const handled = await handleBanCommand(sock, msg, text);
+  if (!pending) return;
 
-  if (handled) return;
+  const sender = msg.key.participant || msg.key.remoteJid;
+  const admins = await getGroupAdmins(sock, from);
 
+  if (!admins.includes(sender)) return;
+
+  const user = pending.user;
+
+  const template =
+    goodbyeCache[from] ||
+    "👋 Goodbye {user}\n\nYou are no longer a member of this group.";
+
+  const username = user.split("@")[0];
+
+  const message = template.replace("{user}", `@${username}`);
+
+  await sock.sendMessage(user, {
+    text: message
+  });
+
+  delete pendingFarewellConfirm[from];
+
+  await sock.sendMessage(from,{
+    text:"✅ Farewell message sent privately."
+  });
+
+  return;
+}
+if (isGroup && msg.message?.imageMessage) {
+
+  const caption = msg.message.imageMessage.caption || "";
+
+  if (!caption.toLowerCase().startsWith("/kiroflix .stickers")) return;
+
+  const sender = msg.key.participant || msg.key.remoteJid;
+
+  if (groupCommandsCache[from]?.stickers === "off") {
+    await sock.sendMessage(from, {
+      text: "❌ Stickers feature is disabled in this group."
+    });
+    return; // STOP PROCESSING
+  }
+
+  console.log("📥 Sticker command received");
+
+  const mediaMessage = msg.message.imageMessage;
+
+  console.log("🖼 Media mimetype:", mediaMessage.mimetype);
+
+  const waitMsg = await sock.sendMessage(from, {
+    text: "⏳ Converting your image to sticker..."
+  });
+
+  try {
+
+    const stream = await downloadContentFromMessage(mediaMessage, "image");
+
+    let buffer = Buffer.from([]);
+
+    for await (const chunk of stream) {
+      buffer = Buffer.concat([buffer, chunk]);
+    }
+
+    console.log("📦 Image buffer size:", buffer.length);
+
+    const { join } = require("path");
+    const fs = require("fs");
+
+    const tempFile = join(__dirname, `sticker_${Date.now()}.webp`);
+
+    await imageToWebp(buffer, tempFile);
+
+    await sock.sendMessage(from, {
+      sticker: { url: tempFile }
+    });
+
+    await sock.sendMessage(from, { delete: waitMsg.key });
+
+    fs.unlink(tempFile, () => {});
+
+    console.log("🎉 Sticker sent successfully");
+
+    return; // ✅ STOP MESSAGE FLOW AFTER SUCCESS
+
+  } catch (err) {
+
+    console.error("❌ Sticker conversion failed:", err);
+
+    await sock.sendMessage(from, {
+      text: "❌ Failed to convert image to sticker."
+    });
+
+    await sock.sendMessage(from, { delete: waitMsg.key });
+
+    return; // ✅ STOP MESSAGE FLOW AFTER ERROR
+  }
 }
 if (isGroup && text.toLowerCase() === "/kiroflix .leaderboard") {
 
@@ -3378,22 +3634,141 @@ if (isGroup && text.toLowerCase().startsWith("/kiroflix .kick ")) {
     if (isGroup) {
       if (!text.toLowerCase().startsWith("/kiroflix")) return;
       text = text.replace(/^\/kiroflix/i, "").trim();
-      if(isGroup && text.startsWith(".welcome edit")){
+      if (isGroup && text.startsWith(".salutation edit")) {
 
-const sender = msg.key.participant || msg.key.remoteJid;
-const admins = await getGroupAdmins(sock,from);
+  const sender = msg.key.participant || msg.key.remoteJid;
+  const admins = await getGroupAdmins(sock, from);
 
-if(!admins.includes(sender)){
-await sock.sendMessage(from,{text:"❌ Only admins can edit welcome message"});
-return;
+  if (!admins.includes(sender)) {
+    await sock.sendMessage(from,{
+      text:"❌ Only admins can edit the farewell message."
+    });
+    return;
+  }
+
+  const template = text.replace(".salutation edit","").trim();
+
+  if (!template) {
+
+    await sock.sendMessage(from,{
+      text:
+`✏️ Salutation Editor
+
+Use {user} where the member mention should appear.
+
+Example:
+
+👋 Goodbye {user}
+
+We hope you enjoyed your stay.
+You are always welcome back!`
+    });
+
+    return;
+  }
+
+  await axios.post(
+    "https://kiroflix.site/backend/update_salutation.php",
+    {
+      group_id: from,
+      admin_id: sender,
+      salutation_text: template
+    }
+  );
+
+  goodbyeCache[from] = template;
+
+  await sock.sendMessage(from,{
+    text:"✅ Farewell message updated."
+  });
+
+  return;
 }
+      if (isGroup && text.toLowerCase() === ".stats") {
 
-const template = text.replace(".welcome edit","").trim();
+  const stats = messageStats[from];
 
-if(!template){
+  if (!stats) {
+    await sock.sendMessage(from,{
+      text:"📊 No statistics available yet for this group."
+    });
+    return;
+  }
 
-await sock.sendMessage(from,{
-text:`📝 Welcome Editor
+  const total = stats.total || 0;
+  const users = Object.keys(stats.users).length;
+
+  let msgText =
+`📊 *Group Usage Stats*
+
+👥 Active Users: ${users}
+💬 Total Messages: ${total}
+
+Use *.active* to see most active users.`;
+
+  await sock.sendMessage(from,{ text: msgText });
+
+  return;
+}
+if (isGroup && text.toLowerCase() === ".active") {
+
+  const stats = messageStats[from];
+
+  if (!stats || !stats.users) {
+    await sock.sendMessage(from,{
+      text:"🔥 No activity recorded yet."
+    });
+    return;
+  }
+
+  const sorted = Object.entries(stats.users)
+    .sort((a,b) => b[1] - a[1])
+    .slice(0,10);
+
+  if (!sorted.length) {
+    await sock.sendMessage(from,{
+      text:"🔥 No active users yet."
+    });
+    return;
+  }
+
+  let textMsg = "🔥 *Most Active Users*\n\n";
+
+  let mentions = [];
+
+  sorted.forEach((user,index)=>{
+
+    const id = user[0];
+    const count = user[1];
+
+    mentions.push(id);
+
+    textMsg += `${index+1}. @${id.split("@")[0]} — ${count} msgs\n`;
+
+  });
+
+  await sock.sendMessage(from,{
+    text: textMsg,
+    mentions
+  });
+
+  return;
+}
+      if (isGroup && text.startsWith(".welcome edit")) {
+
+  const sender = msg.key.participant || msg.key.remoteJid;
+  const admins = await getGroupAdmins(sock, from);
+
+  if (!admins.includes(sender)) {
+    await sock.sendMessage(from, { text: "❌ Only admins can edit welcome message" });
+    return;
+  }
+
+  const template = text.replace(".welcome edit", "").trim();
+
+  if (!template) {
+    await sock.sendMessage(from, {
+      text: `📝 Welcome Editor
 
 Use {user} where the member mention should appear.
 
@@ -3407,26 +3782,27 @@ Rules:
 1. Respect everyone
 2. No spam
 3. Stay on topic`
-});
+    });
+    return;
+  }
 
-return;
-}
+  await axios.post(
+    "https://kiroflix.site/backend/update_welcome.php",
+    {
+      group_id: from,
+      admin_id: sender,
+      welcome_text: template
+    }
+  );
 
-await axios.post(
-"https://kiroflix.site/backend/update_welcome.php",
-{
-group_id:from,
-admin_id:sender,
-welcome_text:template
-}
-);
+  welcomeCache[from] = template;
 
-welcomeCache[from] = template;
+  await sock.sendMessage(from, {
+    text: "✅ Welcome message updated."
+  });
 
-await sock.sendMessage(from,{
-text:"✅ Welcome message updated."
-});
-
+  // ⚠️ Stop further processing after sending confirmation
+  return;
 }
       if (isGroup && text.toLowerCase() === ".guessanime") {
 
