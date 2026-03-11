@@ -78,7 +78,11 @@ const toggledCommands = {
   waifu: "💖 Waifu claim system (.waifu on/off)",
   antispam: "🚫 Anti spam protection (.antispam on/off)",
   antiflood: "⚡ Anti flood protection (.antiflood on/off)",
-  links: "🔗 Block links (.links on/off)",
+  antilinks: "🔗 Block links (.antilinks on/off)",
+  antiraid: "🛡 Anti raid protection (.antiraid on/off)",
+  antimention: "📢 Block mention spam (.antimention on/off)",
+  antisticker: "🧩 Prevent sticker spam (.antisticker on/off)",
+  raidlock: "🔒 Auto lock group during raid (.raidlock on/off)",
   welcome: "👋 Welcome message (.welcome on/off)",
   mute: "🔇 Mute the bot (.mute on/off)",
   slowmode: "🐢 Enable slowmode (.slowmode 10s)",
@@ -1734,53 +1738,120 @@ ${a.synopsis}`
   }
 }
 let manhwaRecFirstRun = true;
+
+// ---------------- FETCH MANHWA ----------------
 async function fetchDailyManhwaRecommendation() {
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+
+    try {
+
+      const randomPage = Math.floor(Math.random() * 200) + 1;
+
+      const { data } = await axios.get(
+        `https://kiroflix.site/backend/get_manhwa.php?page=${randomPage}`,
+        { timeout: 10000 }
+      );
+
+      const items = data?.result?.items || [];
+      if (!items.length) continue;
+
+      const filtered = items.filter(m =>
+        !m.is_nsfw &&
+        m.poster?.large &&
+        m.synopsis
+      );
+
+      if (!filtered.length) continue;
+
+      const randomManhwa =
+        filtered[Math.floor(Math.random() * filtered.length)];
+
+      return {
+        id: randomManhwa.manga_id,
+        title: randomManhwa.title,
+        chapter: randomManhwa.latest_chapter,
+        rating: randomManhwa.rated_avg,
+        synopsis: randomManhwa.synopsis.slice(0, 160) + "...",
+        image: randomManhwa.poster.large
+      };
+
+    } catch (err) {
+
+      console.log("Retrying manhwa fetch:", err.message);
+
+    }
+
+    await new Promise(r => setTimeout(r, 1500));
+
+  }
+
+  return null;
+}
+
+
+// ---------------- DOWNLOAD IMAGE SAFELY ----------------
+async function downloadImageWithProxy(url) {
+
   try {
 
-    const randomPage = Math.floor(Math.random() * 200) + 1;
+    // Try direct download first
+    const res = await axios.get(url, {
+      responseType: "arraybuffer",
+      timeout: 15000
+    });
 
-    const { data } = await axios.get(
-      `https://kiroflix.site/backend/get_manhwa.php?page=${randomPage}`,
-      { timeout: 20000 }
-    );
+    console.log("✅ Image downloaded directly");
 
-    const items = data?.result?.items || [];
-
-    if (!items.length) return null;
-
-    // remove nsfw
-    const filtered = items.filter(m =>
-      !m.is_nsfw &&
-      m.poster?.large &&
-      m.synopsis
-    );
-
-    if (!filtered.length) return null;
-
-    const randomManhwa =
-      filtered[Math.floor(Math.random() * filtered.length)];
-
-    return {
-      id: randomManhwa.manga_id,
-      title: randomManhwa.title,
-      chapter: randomManhwa.latest_chapter,
-      rating: randomManhwa.rated_avg,
-      synopsis: randomManhwa.synopsis.slice(0, 160) + "...",
-      image: randomManhwa.poster.large
-    };
+    return Buffer.from(res.data);
 
   } catch (err) {
-    console.log("❌ Manhwa recommendation error:", err.message);
-    return null;
+
+    console.log("⚠️ Direct image failed, using proxy...");
+
+    try {
+
+      const proxyUrl =
+        "https://kirotools.onrender.com/proxy?url=" +
+        encodeURIComponent(url);
+
+      const res = await axios.get(proxyUrl, {
+        responseType: "arraybuffer",
+        timeout: 20000
+      });
+
+      console.log("✅ Image downloaded via proxy");
+
+      return Buffer.from(res.data);
+
+    } catch (proxyErr) {
+
+      console.log("❌ Proxy image download failed:", proxyErr.message);
+
+      return null;
+
+    }
+
   }
+
 }
+
+
+// ---------------- SEND RECOMMENDATION ----------------
 async function sendDailyManhwaRecommendation(sock) {
+
   try {
 
     console.log("📚 Generating daily manhwa recommendation...");
 
     const manhwa = await fetchDailyManhwaRecommendation();
-    if (!manhwa) return;
+
+    if (!manhwa) {
+      console.log("❌ No manhwa found");
+      return;
+    }
+
+    console.log("Selected manhwa:", manhwa.title);
 
     const caption =
 `📚 *Manhwa Recommendation of the Day*
@@ -1791,21 +1862,32 @@ async function sendDailyManhwaRecommendation(sock) {
 
 ${manhwa.synopsis}`;
 
-    // 🧪 FIRST RUN → SEND ONLY TO TEST GROUP
+
+    const imageBuffer = await downloadImageWithProxy(manhwa.image);
+
+    if (!imageBuffer) {
+      console.log("❌ Image failed completely, skipping send");
+      return;
+    }
+
+    // ---------------- TEST GROUP FIRST RUN ----------------
     if (manhwaRecFirstRun) {
 
       console.log("🧪 First run → sending only to test group");
 
       await sock.sendMessage(TEST_GROUP_ID, {
-        image: { url: manhwa.image },
+        image: imageBuffer,
         caption
-      }).catch(()=>{});
+      });
 
       manhwaRecFirstRun = false;
+
+      console.log("✅ Test manhwa sent");
+
       return;
     }
 
-    // ✅ NORMAL RUN → SEND TO GROUPS WITH manhwarec ON
+    // ---------------- NORMAL GROUP SEND ----------------
     const groups = Object.keys(groupCommandsCache).filter(
       gid => groupCommandsCache[gid]?.manhwadaily === "on"
     );
@@ -1814,20 +1896,36 @@ ${manhwa.synopsis}`;
 
     for (const gid of groups) {
 
-      await sock.sendMessage(gid, {
-        image: { url: manhwa.image },
-        caption
-      }).catch(()=>{});
+      try {
+
+        await sock.sendMessage(gid, {
+          image: imageBuffer,
+          caption
+        });
+
+        console.log("✅ Sent to:", gid);
+
+      } catch (err) {
+
+        console.log("❌ Failed sending to", gid, err.message);
+
+      }
 
       // delay to avoid WhatsApp rate limit
       await new Promise(r => setTimeout(r, 3000));
+
     }
 
   } catch (err) {
+
     console.error("❌ Manhwa recommendation worker error:", err.message);
+
   }
+
 }
 let wallpaperFirstRun = true;
+// store wallpapers sent by the bot
+const wallpaperReplyCache = {};
 async function fetchDailyWallpapers() {
   const wallpapers = [];
 
@@ -1850,9 +1948,10 @@ async function fetchDailyWallpapers() {
             data.results[Math.floor(Math.random() * data.results.length)];
 
           wallpapers.push({
-            title: randomWallpaper.title,
-            image: randomWallpaper.wallpaper
-          });
+  title: randomWallpaper.title,
+  image: randomWallpaper.wallpaper,
+  page: randomWallpaper.page
+});
 
           found = true;
         } else {
@@ -1871,6 +1970,7 @@ async function fetchDailyWallpapers() {
   return wallpapers;
 }
 async function sendDailyWallpapers(sock) {
+
   try {
 
     console.log("🌅 Generating daily wallpapers...");
@@ -1881,7 +1981,11 @@ async function sendDailyWallpapers(sock) {
     const caption =
 `🌅 *Daily Anime Wallpapers Pack*
 
-Enjoy today's wallpapers! ✨`;
+Enjoy today's wallpapers! ✨
+
+💬 Reply with:
+desktop / mobile / tablet
+to download wallpaper`;
 
     // 🧪 FIRST RUN → TEST GROUP
     if (wallpaperFirstRun) {
@@ -1890,10 +1994,17 @@ Enjoy today's wallpapers! ✨`;
 
       for (const w of wallpapers) {
 
-        await sock.sendMessage(TEST_GROUP_ID, {
+        const msg = await sock.sendMessage(TEST_GROUP_ID, {
           image: { url: w.image },
-          caption: `${caption}\n\n🖼 ${w.title}`
-        }).catch(()=>{});
+          caption: `${caption}
+
+🖼 ${w.title}`
+        }).catch(()=>null);
+
+        // store wallpaper metadata for reply detection
+        if (msg?.key?.id) {
+          wallpaperReplyCache[msg.key.id] = w;
+        }
 
         await new Promise(r => setTimeout(r, 2500));
       }
@@ -1913,10 +2024,17 @@ Enjoy today's wallpapers! ✨`;
 
       for (const w of wallpapers) {
 
-        await sock.sendMessage(gid, {
+        const msg = await sock.sendMessage(gid, {
           image: { url: w.image },
-          caption: `${caption}\n\n🖼 ${w.title}`
-        }).catch(()=>{});
+          caption: `${caption}
+
+🖼 ${w.title}`
+        }).catch(()=>null);
+
+        // store wallpaper metadata
+        if (msg?.key?.id) {
+          wallpaperReplyCache[msg.key.id] = w;
+        }
 
         await new Promise(r => setTimeout(r, 3000));
       }
@@ -1925,8 +2043,37 @@ Enjoy today's wallpapers! ✨`;
     }
 
   } catch (err) {
+
     console.error("❌ Daily wallpaper worker error:", err.message);
+
   }
+}
+function generateWallpaperLinks(pageUrl) {
+
+  const match = pageUrl.match(/-(\d+)\.html$/);
+
+  if (!match) return null;
+
+  const id = match[1];
+
+  const slug = pageUrl
+    .split("/")
+    .pop()
+    .replace(".html","")
+    .replace("-"+id,"");
+
+  return {
+
+    desktop:
+`https://4kwallpapers.com/images/wallpapers/${slug}-${id}.jpg`,
+
+    mobile:
+`https://4kwallpapers.com/images/wallpapers/${slug}-1242x2208-${id}.jpg`,
+
+    tablet:
+`https://4kwallpapers.com/images/wallpapers/${slug}-2048x2048-${id}.jpg`
+
+  };
 }
 // -------------------- UPDATE COMMAND STATUS --------------------
 async function updateCommandStatus(groupId, adminId, command, action) {
@@ -2404,46 +2551,29 @@ async function fetchGroupsFromBackend() {
 
     if (data.success && data.data) {
       data.data.forEach(group => {
-        // Initialize toggled commands with default values
+        // List of commands that default OFF
+        const defaultOff = [
+          "games", "waifu", "antispam", "antiflood", "antilinks",
+          "antiraid", "antimention", "antisticker", "raidlock",
+          "welcome", "mute", "slowmode", "stickers", "salutation"
+        ];
+
+        // Initialize all commands
         const commands = {};
 
-        // Define which commands default ON and which default OFF
-        const defaultOn = [
-          "bot",
-          "ai",
-          "anime",
-          "lasteps",
-          "animerec",
-          "manhwa",
-          "manhwadaily",
-          "manhwarelease",
-          "wallpaper",
-          "wallpaperdaily"
-        ];
-
-        const defaultOff = [
-          "games",
-          "waifu",
-          "antispam",
-          "antiflood",
-          "links",
-          "welcome",
-          "mute",
-          "slowmode"
-        ];
-
-        // Set defaults
         Object.keys(toggledCommands).forEach(cmd => {
-          if (defaultOn.includes(cmd)) commands[cmd] = "on";
-          else if (defaultOff.includes(cmd)) commands[cmd] = "off";
-          else commands[cmd] = "on"; // fallback
+          if (defaultOff.includes(cmd)) {
+            commands[cmd] = "off";
+          } else {
+            commands[cmd] = "on"; // default ON for other commands
+          }
         });
 
         // Override with backend status if available
         if (group.commands && Array.isArray(group.commands)) {
           group.commands.forEach(c => {
             if (commands[c.command] !== undefined) {
-              commands[c.command] = c.status; // update only toggled commands
+              commands[c.command] = c.status; // use backend status
             }
           });
         }
@@ -2500,7 +2630,16 @@ async function searchAnimeCharacter(name) {
 // -------------------- ANTI-SPAM (Rapid & Repeated Detection) --------------------
 const userMessageCache = {}; // { groupId: { userId: [{content, timestamp}, ...] } }
 const groupMetadataCache = {}; // cache to reduce API calls
-
+const protectionCache = {
+  messages:{},
+  joins:{},
+  stickers:{},
+  mentions:{},
+  slowmode:{},
+  links:{}
+};
+const linkRegex =
+/(https?:\/\/|www\.|chat\.whatsapp\.com|t\.me|discord\.gg|bit\.ly|tinyurl\.com|instagram\.com|tiktok\.com)/i;
 async function getCachedGroupMetadata(sock, groupId) {
   if (groupMetadataCache[groupId]) return groupMetadataCache[groupId];
 
@@ -2517,130 +2656,406 @@ async function getCachedGroupMetadata(sock, groupId) {
     return null;
   }
 }
+const DB_FILE = path.join(__dirname, "groupProtection.json");
 
-async function handleGroupProtection(sock, msg) {
+let protectionDB = loadDB();
+function loadDB() {
   try {
-    const from = msg.key.remoteJid;
-    if (!from.endsWith("@g.us")) return; // only groups
-
-    const userId = msg.key.participant || msg.key.remoteJid;
-    const metadata = await getCachedGroupMetadata(sock, from);
-    if (!metadata) return;
-
-    // Skip admins & bot
-    const participant = metadata.participants.find(p => p.id === userId);
-    if (!participant) return;
-    if (["admin", "superadmin", "creator"].includes(participant.admin)) return;
-    if (userId === sock.user.id) return;
-
-    // Get sender name for mentions
-    const userName = participant?.name || userId.split("@")[0];
-
-    // Extract message content
-    let content = "";
-    if (msg.message.conversation) content = msg.message.conversation;
-    else if (msg.message.extendedTextMessage?.text) content = msg.message.extendedTextMessage.text;
-    else if (msg.message.imageMessage?.caption) content = msg.message.imageMessage.caption || "<image>";
-    else if (msg.message.videoMessage?.caption) content = msg.message.videoMessage.caption || "<video>";
-    else if (msg.message.stickerMessage) content = "<sticker>";
-    else content = JSON.stringify(msg.message);
-
-    const now = Date.now();
-    if (!userMessageCache[from]) userMessageCache[from] = {};
-    if (!userMessageCache[from][userId]) userMessageCache[from][userId] = [];
-    userMessageCache[from][userId].push({ content, timestamp: now });
-
-    const admins = metadata.participants
-      .filter(p => ["admin", "superadmin", "creator"].includes(p.admin))
-      .map(p => p.id);
-
-    // ------------------- ANTI-FLOOD -------------------
-    if (groupCommandsCache[from]?.antiflood === "on") {
-      const FLOOD_COOLDOWN = 3000; // 3 sec
-      const FLOOD_THRESHOLD = 5;   // 5 messages in 3s
-      const recent = userMessageCache[from][userId].filter(m => now - m.timestamp <= FLOOD_COOLDOWN);
-
-      if (!participant.floodWarnings) participant.floodWarnings = 0;
-
-      if (recent.length >= FLOOD_THRESHOLD) {
-        participant.floodWarnings += 1;
-
-        if (participant.floodWarnings < 3) {
-          await sock.sendMessage(from, {
-            text: `⚠️ ${userName}, stop flooding! Warning ${participant.floodWarnings}/3.`,
-          });
-        } else {
-          try {
-            await sock.groupParticipantsUpdate(from, [userId], "remove");
-            await sock.sendMessage(from, { text: `🚫 ${userName} removed for flooding.` });
-          } catch {
-            if (admins.length) await sock.sendMessage(from, { text: `⚠️ ${userName} is flooding! Admins, take action.`, mentions: admins });
-          }
-          participant.floodWarnings = 0; // reset
-        }
-
-        userMessageCache[from][userId] = [];
-        return;
-      }
+    if (!fs.existsSync(DB_FILE)) {
+      fs.writeFileSync(DB_FILE, JSON.stringify({ groups: {} }, null, 2));
     }
 
-    // ------------------- ANTI-SPAM -------------------
-    if (groupCommandsCache[from]?.antispam === "on") {
-      const SPAM_COOLDOWN = 60_000; // 1 min
-      const recent = userMessageCache[from][userId].filter(m => now - m.timestamp <= SPAM_COOLDOWN);
-      const repeatCount = recent.filter(m => m.content === content).length;
-
-      if (repeatCount >= 1) { // 1 attempt only
-        try {
-          await sock.groupParticipantsUpdate(from, [userId], "remove");
-          await sock.sendMessage(from, { text: `🚫 ${userName} removed for spamming.` });
-        } catch {
-          if (admins.length) await sock.sendMessage(from, { text: `⚠️ ${userName} is spamming! Admins, take action.`, mentions: admins });
-        }
-        userMessageCache[from][userId] = [];
-        return;
-      }
-    }
-
-    // ------------------- LINK BLOCKING -------------------
-    // ------------------- LINK BLOCKING -------------------
-if (groupCommandsCache[from]?.links === "on") {
-  const urlRegex = /(https?:\/\/[^\s]+)/gi;
-  const recent = userMessageCache[from][userId].filter(m => now - m.timestamp <= 60_000); // 1 min window
-  const linkCount = recent.filter(m => urlRegex.test(m.content)).length;
-
-  if (urlRegex.test(content)) {
-    try {
-      // Delete the message containing the link
-      await sock.sendMessage(from, { delete: msg.key });
-      await sock.sendMessage(from, { text: `⚠️ ${userName}, sending links is not allowed! Message deleted.` });
-    } catch {
-      if (admins.length) await sock.sendMessage(from, { text: `⚠️ ${userName} sent a link! Admins, take action.`, mentions: admins });
-    }
-    return; // stop further processing
+    return JSON.parse(fs.readFileSync(DB_FILE));
+  } catch (e) {
+    console.log("DB reset (corrupted)");
+    return { groups: {} };
   }
+}
 
-  // If user sends more than 3 links in 1 min, remove
-  if (linkCount >= 3) {
-    try {
-      await sock.groupParticipantsUpdate(from, [userId], "remove");
-      await sock.sendMessage(from, { text: `🚫 ${userName} removed for sending too many links.` });
-    } catch {
-      if (admins.length) await sock.sendMessage(from, { text: `⚠️ ${userName} sent multiple links! Admins, take action.`, mentions: admins });
+function saveDB(data) {
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(data));
+  } catch {}
+}
+function getMessageContent(msg) {
+  if (!msg.message) return "";
+
+  if (msg.message.conversation)
+    return msg.message.conversation;
+
+  if (msg.message.extendedTextMessage?.text)
+    return msg.message.extendedTextMessage.text;
+
+  if (msg.message.imageMessage?.caption)
+    return msg.message.imageMessage.caption;
+
+  if (msg.message.videoMessage?.caption)
+    return msg.message.videoMessage.caption;
+
+  if (msg.message.documentMessage?.caption)
+    return msg.message.documentMessage.caption;
+
+  return "";
+}
+const warningCache = {};
+const floodWarnings = {};
+const mentionWarnings = {};
+
+async function handleGroupProtection(sock,msg){
+
+try{
+
+const from = msg.key.remoteJid;
+if(!from?.endsWith("@g.us")) return;
+
+const userId = msg.key.participant;
+if(!userId) return;
+
+if(userId === sock.user.id) return;
+
+const metadata = await getCachedGroupMetadata(sock,from);
+if(!metadata) return;
+
+const participant = metadata.participants.find(p=>p.id===userId);
+if(!participant) return;
+
+if(["admin","superadmin"].includes(participant.admin)) return;
+
+const text = getMessageContent(msg) || "";
+const now = Date.now();
+
+if(!protectionCache.messages[from])
+  protectionCache.messages[from] = {};
+
+if(!protectionCache.messages[from][userId])
+  protectionCache.messages[from][userId] = [];
+
+const userMessages = protectionCache.messages[from][userId];
+
+userMessages.push({
+text,
+time:now
+});
+
+if(userMessages.length > 15)
+  userMessages.shift();
+
+const mention = "@"+userId.split("@")[0];
+
+const settings = groupCommandsCache[from] || {};
+
+
+// -------------------- ANTIFLOOD --------------------
+
+if(settings.antiflood === "on"){
+
+const recent =
+userMessages.filter(m=> now - m.time < 4000);
+
+if(recent.length >= 7){
+
+await sock.sendMessage(from,{
+text:`⚠️ ${mention} flooding detected`,
+mentions:[userId]
+});
+
+try{
+await sock.groupParticipantsUpdate(from,[userId],"remove");
+}catch{}
+
+return;
+}
+
+}
+
+
+// -------------------- ANTISPAM --------------------
+
+if (settings.antispam === "on") {
+
+  const recent = userMessages.filter(m => now - m.time < 30000);
+
+  const duplicates =
+    recent.filter(m => m.text === text && now - m.time > 800);
+
+  if (duplicates.length >= 3) {
+
+    if (!warningCache[from]) warningCache[from] = {};
+    if (!warningCache[from][userId]) warningCache[from][userId] = 0;
+
+    warningCache[from][userId]++;
+
+    const warn = warningCache[from][userId];
+
+    if (warn < 3) {
+
+      await sock.sendMessage(from, {
+        text: `⚠️ @${userId.split("@")[0]} stop spamming! Warning ${warn}/3`,
+        mentions: [userId]
+      });
+
+    } else {
+
+      await sock.sendMessage(from, {
+        text: `🚫 @${userId.split("@")[0]} removed for spam`,
+        mentions: [userId]
+      });
+
+      try {
+        await sock.groupParticipantsUpdate(from, [userId], "remove");
+      } catch {}
+
+      warningCache[from][userId] = 0;
+
+      if (protectionCache.messages?.[from]?.[userId]) {
+        delete protectionCache.messages[from][userId];
+      }
+
     }
-    userMessageCache[from][userId] = [];
+
     return;
   }
 }
 
-  } catch (err) {
-    console.error("❌ handleGroupProtection error:", err.message);
+// -------------------- ANTIFLOOD --------------------
+
+if (settings.antiflood === "on") {
+
+  const FLOOD_WINDOW = 5000;   // 5 seconds
+  const FLOOD_LIMIT = 6;       // 6 messages in window
+  const MAX_WARNINGS = 3;
+
+  const recent = userMessages.filter(m => now - m.time < FLOOD_WINDOW);
+
+  if (recent.length >= FLOOD_LIMIT) {
+
+    if (!floodWarnings[from]) floodWarnings[from] = {};
+    if (!floodWarnings[from][userId]) floodWarnings[from][userId] = {
+      count: 0,
+      last: 0
+    };
+
+    const warnData = floodWarnings[from][userId];
+
+    // reset warnings if user stopped flooding for 1 minute
+    if (now - warnData.last > 60000) {
+      warnData.count = 0;
+    }
+
+    warnData.count++;
+    warnData.last = now;
+
+    const mention = "@" + userId.split("@")[0];
+
+    if (warnData.count <= MAX_WARNINGS) {
+
+      await sock.sendMessage(from,{
+        text:`⚠️ ${mention} stop flooding! Warning ${warnData.count}/${MAX_WARNINGS}`,
+        mentions:[userId]
+      });
+
+    }
+
+    if (warnData.count > MAX_WARNINGS) {
+
+      await sock.sendMessage(from,{
+        text:`🚫 ${mention} removed for flooding`,
+        mentions:[userId]
+      });
+
+      try{
+        await sock.groupParticipantsUpdate(from,[userId],"remove");
+      }catch{}
+
+      warnData.count = 0;
+
+      if (protectionCache.messages?.[from]?.[userId]) {
+        delete protectionCache.messages[from][userId];
+      }
+
+    }
+
+    return;
   }
 }
-//
-// -------------------- GROUP MENU --------------------
-//
+// -------------------- ANTILINKS --------------------
 
+if(settings.antilinks === "on"){
+
+if(linkRegex.test(text)){
+
+try{
+
+await sock.sendMessage(from,{delete:msg.key});
+
+await sock.sendMessage(from,{
+text:`⚠️ ${mention} links are not allowed`,
+mentions:[userId]
+});
+
+}catch{}
+
+return;
+}
+
+}
+
+
+// -------------------- ANTIMENTION --------------------
+
+if (settings.antimention === "on") {
+
+  const mentions =
+    msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+
+  if (!mentionWarnings[from]) mentionWarnings[from] = {};
+  if (!mentionWarnings[from][userId]) {
+    mentionWarnings[from][userId] = {
+      warnings: 0,
+      history: []
+    };
+  }
+
+  const data = mentionWarnings[from][userId];
+  const now = Date.now();
+
+  // store mention activity
+  data.history.push({
+    count: mentions.length,
+    time: now
+  });
+
+  // keep only last 15 seconds
+  data.history = data.history.filter(m => now - m.time < 15000);
+
+  const mentionTotal =
+    data.history.reduce((a,b)=>a + b.count,0);
+
+  const invisible =
+    /[\u200B-\u200F\u202A-\u202E]/;
+
+  const isInvisibleSpam =
+    invisible.test(text) && mentions.length >= 2;
+
+  const isMassMention =
+    mentions.length >= 6;
+
+  const isBurstMention =
+    mentionTotal >= 10;
+
+  if (isMassMention || isBurstMention || isInvisibleSpam) {
+
+    data.warnings++;
+
+    try {
+      await sock.sendMessage(from,{delete:msg.key});
+    } catch {}
+
+    if (data.warnings <= 3) {
+
+      await sock.sendMessage(from,{
+        text:`⚠️ ${mention} mention spam detected\nWarning ${data.warnings}/3`,
+        mentions:[userId]
+      });
+
+    }
+
+    if (data.warnings > 3) {
+
+      await sock.sendMessage(from,{
+        text:`🚫 ${mention} removed for mention spam`,
+        mentions:[userId]
+      });
+
+      try {
+        await sock.groupParticipantsUpdate(from,[userId],"remove");
+      } catch {}
+
+      data.warnings = 0;
+      data.history = [];
+
+      if (protectionCache.messages?.[from]?.[userId])
+        delete protectionCache.messages[from][userId];
+    }
+
+    return;
+  }
+
+}
+// -------------------- ANTISTICKER --------------------
+const stickerMsg =
+  msg.message?.stickerMessage ||
+  msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage ||
+  (msg.message?.documentMessage?.mimetype === "image/webp" ? msg.message.documentMessage : null);
+
+if (settings.antisticker === "on" && stickerMsg) {
+  if (!protectionCache.stickers[from]) protectionCache.stickers[from] = {};
+  if (!protectionCache.stickers[from][userId]) protectionCache.stickers[from][userId] = [];
+
+  const now = Date.now();
+  protectionCache.stickers[from][userId].push(now);
+
+  // keep only last 6 seconds
+  protectionCache.stickers[from][userId] =
+    protectionCache.stickers[from][userId].filter(t => now - t < 6000);
+
+  if (protectionCache.stickers[from][userId].length >= 5) {
+    await sock.sendMessage(from, {
+      text: `⚠️ @${userId.split("@")[0]} sticker spam detected`,
+      mentions: [userId]
+    });
+
+    try {
+      await sock.groupParticipantsUpdate(from, [userId], "remove"); // optional
+    } catch {}
+
+    protectionCache.stickers[from][userId] = [];
+    return;
+  }
+}
+// -------------------- SLOWMODE --------------------
+if (settings.slowmode === "on") {
+  const SLOW_DELAY = 10 * 1000; // 10 seconds per message
+  if (!protectionCache.slowmode[from]) protectionCache.slowmode[from] = {};
+
+  const lastMsgTime = protectionCache.slowmode[from][userId] || 0;
+  const now = Date.now();
+
+  // Check if the user is sending any type of message
+  const hasMessage =
+  !!msg.message?.conversation ||                  // text
+  !!msg.message?.extendedTextMessage ||          // reply text
+  !!msg.message?.imageMessage ||                 // image
+  !!msg.message?.videoMessage ||                 // video
+  !!msg.message?.documentMessage ||              // document/file
+  !!msg.message?.stickerMessage ||               // sticker
+  !!msg.message?.audioMessage ||                 // audio
+  !!msg.message?.contactMessage ||               // contact
+  !!msg.message?.locationMessage;                // location
+
+  if (hasMessage && now - lastMsgTime < SLOW_DELAY) {
+    // Delete the message if sent too soon
+    try { await sock.sendMessage(from, { delete: msg.key }); } catch {}
+
+    // Optional: notify the user
+    await sock.sendMessage(from, {
+      text: `⏳ @${userId.split("@")[0]}, slow mode is enabled. Wait 10 seconds before sending another message.`,
+      mentions: [userId]
+    });
+
+    return; // stop further processing
+  }
+
+  // Update last message time
+  if (hasMessage) protectionCache.slowmode[from][userId] = now;
+}
+
+}catch(err){
+
+console.log("Protection error:",err.message);
+
+}
+}
 async function sendGroupMenu(sock, from, sender) {
   try {
     const metadata = await sock.groupMetadata(from);
@@ -2649,23 +3064,28 @@ async function sendGroupMenu(sock, from, sender) {
       .filter(p => p.admin === "admin" || p.admin === "superadmin")
       .map(p => p.id);
 
-    // Only admins can see menu
     if (!adminIds.includes(sender)) return;
 
-    // 🔹 Toggled commands with status
+    // Define defaultOff for menu display
+    const defaultOff = [
+      "games", "waifu", "antispam", "antiflood", "antilinks",
+      "antiraid", "antimention", "antisticker", "raidlock",
+      "welcome", "mute", "slowmode", "stickers", "salutation"
+    ];
+
     const toggledText = Object.entries(toggledCommands)
       .map(([cmd, desc]) => {
-        const status = groupCommandsCache[from]?.[cmd] || "on";
+        // use cache if exists, else defaultOff → off, else on
+        let status = groupCommandsCache[from]?.[cmd];
+        if (!status) status = defaultOff.includes(cmd) ? "off" : "on";
         return `• *.${cmd}* → ${desc}  [*${status.toUpperCase()}*]`;
       })
       .join("\n");
 
-    // 🔹 Non-toggled commands
     const nonToggledText = Object.entries(nonToggledCommands)
       .map(([cmd, desc]) => `• *.${cmd}* → ${desc}`)
       .join("\n");
 
-    // Combine and style
     const menuText =
 `📋 *Kiroflix Group Commands Menu*
 
@@ -3114,6 +3534,9 @@ async function startBot() {
     if (connection === "open") {
       console.log("✅ WhatsApp connected");
       qrCodeDataURL = null; // clear QR
+      setInterval(()=>{
+  saveDB(protectionDB);
+},20000);
       await fetchBannedUsers();
       await fetchWelcomeMessages();
       await fetchMessageStats();
@@ -3194,12 +3617,52 @@ sock.ev.on("group-participants.update", async (update) => {
   const groupId = update.id;
 
   try {
+    // -------------------- ANTI RAID --------------------
+if (["add","invite"].includes(update.action)) {
+
+  const now = Date.now();
+
+  if (!protectionCache.joins[groupId])
+    protectionCache.joins[groupId] = [];
+
+  protectionCache.joins[groupId].push(now);
+
+  protectionCache.joins[groupId] =
+    protectionCache.joins[groupId].filter(t => now - t < 15000);
+
+  if (protectionCache.joins[groupId].length >= 8) {
+
+    await sock.sendMessage(groupId,{
+      text:"🚨 Raid detected! Too many users joined."
+    });
+
+  }
+}
+
     // -------------------- WELCOME --------------------
     if (["add","invite"].includes(update.action)) {
       const template = welcomeCache[groupId];
       if (!template) return;
       for (const participant of update.participants) {
-        const userJid = typeof participant === "string" ? participant : participant?.id;
+
+  const userJid = typeof participant === "string" ? participant : participant?.id;
+  if (!userJid) continue;
+
+  // -------------------- CLEAR CACHE --------------------
+  if (protectionCache.messages?.[groupId]?.[userJid])
+    delete protectionCache.messages[groupId][userJid];
+
+  if (protectionCache.stickers?.[userJid])
+    delete protectionCache.stickers[userJid];
+
+  if (protectionCache.slowmode?.[userJid])
+    delete protectionCache.slowmode[userJid];
+  if (floodWarnings?.[groupId]?.[userJid]) {
+  delete floodWarnings[groupId][userJid];
+}
+
+  if (warningCache?.[groupId]?.[userJid])
+    delete warningCache[groupId][userJid];
         if (!userJid) continue;
         const username = userJid.split("@")[0];
         const message = template.replace("{user}", `✦「 @${username} 」`);
@@ -3214,27 +3677,23 @@ sock.ev.on("group-participants.update", async (update) => {
     }
 
     // -------------------- FAREWELL --------------------
-    if (["remove","leave"].includes(update.action)) {
-      const template = goodbyeCache[groupId];
-      if (!template) {
-        console.log(`⚠️ No farewell template set for group ${groupId}`);
-        return;
-      }
+    // -------------------- FAREWELL --------------------
+if (["remove","leave"].includes(update.action)) {
+  const template = goodbyeCache[groupId];
+  if (!template) return;
 
-      for (const participant of update.participants) {
-        const userJid = typeof participant === "string" ? participant : participant?.id;
-        if (!userJid) continue;
-        const username = userJid.split("@")[0];
-        const message = template.replace("{user}", `✦「 @${username} 」`);
+  for (const participant of update.participants) {
+    const userJid = typeof participant === "string" ? participant : participant?.id;
+    if (!userJid) continue;
 
-        // send message privately to the user
-        await sock.sendMessage(userJid, {
-          text: message
-        });
+    // Send the farewell message as-is (no username, no mentions)
+    await sock.sendMessage(userJid, {
+      text: template
+    });
 
-        console.log(`👋 Farewell sent privately to ${username}`);
-      }
-    }
+    console.log(`👋 Farewell sent privately to ${userJid}`);
+  }
+}
 
   } catch (err) {
     console.error("❌ Group participants handler error:", err);
@@ -3329,7 +3788,9 @@ if (isGroup && text.toLowerCase().startsWith("/kiroflix")) {
   // List of commands that are not available yet
   const upcomingCommands = [
     ".mute",
-    ".slowmode",
+    ".raidlock",
+    ".antisticker",
+    ".antiraid",
     ".settings",
     ".reset",
     ".watchparty"
@@ -3374,6 +3835,78 @@ if (isGroup && activeGames[from]) {
 
   // ❌ If it’s not a reply to the game, do NOT block other checks
   // → The rest of your code (anti-spam, commands, etc.) continues as usual
+}
+// 📥 User replied to wallpaper
+const quotedId =
+  msg.message?.extendedTextMessage?.contextInfo?.stanzaId ||
+  msg.message?.imageMessage?.contextInfo?.stanzaId;
+
+if (quotedId && wallpaperReplyCache[quotedId]) {
+
+  const wallpaper = wallpaperReplyCache[quotedId];
+  const links = generateWallpaperLinks(wallpaper.page);
+
+  if (!links) {
+    await sock.sendMessage(from,{
+      text:"❌ Failed to generate wallpaper."
+    });
+    return;
+  }
+
+  const userText = text.toLowerCase();
+
+  let selectedLink = null;
+  let type = "";
+
+  if (userText.includes("desktop")) {
+    selectedLink = links.desktop;
+    type = "🖥 Desktop";
+  }
+
+  else if (userText.includes("mobile") || userText.includes("phone")) {
+    selectedLink = links.mobile;
+    type = "📱 Mobile";
+  }
+
+  else if (userText.includes("tablet")) {
+    selectedLink = links.tablet;
+    type = "📲 Tablet";
+  }
+
+  else {
+    await sock.sendMessage(from,{
+      text:
+`📥 Choose wallpaper type:
+
+Reply with:
+• *desktop*
+• *mobile*
+• *tablet*`
+    });
+    return;
+  }
+
+  try {
+
+    await sock.sendMessage(from,{
+  image: { url: selectedLink },
+  caption:
+`🖼 *${wallpaper.title}*
+
+${type} Wallpaper`
+},{
+  quoted: msg
+});
+
+  } catch(err) {
+
+    await sock.sendMessage(from,{
+      text:"❌ Failed to send wallpaper."
+    });
+
+  }
+
+  return;
 }
     // ✅ Group menu command restricted to admins
 // -------------------- MESSAGE HANDLER --------------------
@@ -3616,20 +4149,25 @@ if (isGroup && text.toLowerCase().startsWith("/kiroflix .kick ")) {
   // 3️⃣ Attempt to kick each mentioned user
   for (const userId of mentions) {
     try {
+      // Attempt kick
       await sock.groupParticipantsUpdate(from, [userId], "remove");
-      const userName = metadata.participants.find(p => p.id === userId)?.name || userId.split("@")[0];
+
+      // Find participant name if available, otherwise fallback to ID
+      const userName = metadata.participants?.find(p => p.id === userId)?.name || userId.split("@")[0];
+
+      // ✅ Success message
       await sock.sendMessage(from, { text: `🚫 ${userName} has been kicked from the group.` });
     } catch (err) {
-      // If bot is not admin
+      // Only send this if the bot truly cannot kick (bot is not admin, or user is admin)
+      console.error(`Kick error for ${userId}:`, err);
+
       await sock.sendMessage(from, {
-        text: `⚠️ Cannot remove <@${userId.split("@")[0]}>. Make sure the bot is an admin!`,
-        mentions: [userId]
+        text: `⚠️ Cannot remove ${userId.split("@")[0]}. Make sure the bot is an admin!`
       });
     }
   }
   return;
 }
-
     // ✅ Group commands
     if (isGroup) {
       if (!text.toLowerCase().startsWith("/kiroflix")) return;
