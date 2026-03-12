@@ -2556,7 +2556,7 @@ async function fetchGroupsFromBackend() {
         const defaultOff = [
           "games", "waifu", "antispam", "antiflood", "antilinks",
           "antiraid", "antimention", "antisticker", "raidlock",
-          "welcome", "mute", "slowmode", "stickers", "salutation"
+          "welcome", "mute", "slowmode", "stickers", "salutation", "antibadwords"
         ];
 
         // Initialize all commands
