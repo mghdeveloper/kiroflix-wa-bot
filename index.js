@@ -2983,6 +2983,27 @@ if (settings.antimention === "on") {
   }
 
 }
+// -------------------- ANTIBADWORDS --------------------
+
+if(settings.antibadwords === "on"){
+
+if(containsBadWord(from,text)){
+
+try{
+
+await sock.sendMessage(from,{delete:msg.key});
+
+await sock.sendMessage(from,{
+text:`🚫 @${userId.split("@")[0]} message removed (bad word detected)`,
+mentions:[userId]
+});
+
+}catch{}
+
+return; // stop message processing
+}
+
+}
 // -------------------- ANTISTICKER --------------------
 const stickerMsg =
   msg.message?.stickerMessage ||
@@ -3071,7 +3092,7 @@ async function sendGroupMenu(sock, from, sender) {
     const defaultOff = [
       "games", "waifu", "antispam", "antiflood", "antilinks",
       "antiraid", "antimention", "antisticker", "raidlock",
-      "welcome", "mute", "slowmode", "stickers", "salutation"
+      "welcome", "mute", "slowmode", "stickers", "salutation","antibadwords"
     ];
 
     const toggledText = Object.entries(toggledCommands)
@@ -3812,27 +3833,7 @@ if (isGroup && isUserBanned(from, userId)) {
       "";
     if (!text) return;
     text = text.trim();
-    // -------------------- ANTIBADWORDS --------------------
-
-if(settings.antibadwords === "on"){
-
-if(containsBadWord(from,text)){
-
-try{
-
-await sock.sendMessage(from,{delete:msg.key});
-
-await sock.sendMessage(from,{
-text:`🚫 @${userId.split("@")[0]} message removed (bad word detected)`,
-mentions:[userId]
-});
-
-}catch{}
-
-return; // stop message processing
-}
-
-}
+    
     if(isGroup && guessAnimeGames[from]){
       
 
