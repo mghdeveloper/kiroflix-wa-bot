@@ -88,21 +88,31 @@ const toggledCommands = {
   mute: "🔇 Mute the bot (.mute on/off)",
   slowmode: "🐢 Enable slowmode (.slowmode 10s)",
   stickers: "🖌 Enable sticker maker (.stickers on/off)",
-  salutation: "📩 Send farewell message when member leaves (.salutation on/off)" // ✅ Added command
+  salutation: "📩 Send farewell message when member leaves (.salutation on/off)"
 };
-// -------------------- NON-TOGGLED COMMANDS --------------------
 const nonToggledCommands = {
   guessanime: "🎯 Anime guessing game (.guessanime start)",
-  quiz: "🧠 Anime quiz (.quiz start)",
+  quiz: "🧠 Anime quiz (.quiz start / .quiz stop)",
   kick: "👢 Kick mentioned user (.kick @user)",
   ban: "⛔ Ban user from bot (.ban @user)",
-  leaderboard: "🏆 Group leaderboard",
-  stats: "📊 Show group usage stats",
-  active: "🔥 Show most active users",
-  settings: "⚙ Show group settings",
-  reset: "♻ Reset group configuration",
-  menu: "📋 Show admin menu",
-  watchparty: "🍿 Start group watch party (.watchparty start)"
+  leaderboard: "🏆 Show group leaderboard (.leaderboard)",
+  myrank: "🏅 Show your rank (.myrank)",
+  ranklist: "📜 Show all ranks (.ranklist)",
+  rankadd: '➕ Add rank (.rank add "Rank Name" points 100 / position 1)',
+  rankdelete: "❌ Delete rank (.rank delete RankName)",
+  stats: "📊 Show group usage stats (.stats)",
+  active: "🔥 Show most active users (.active)",
+  settings: "⚙ Show group settings (.settings)",
+  reset: "♻ Reset group configuration (.reset)",
+  menu: "📋 Show admin menu (.menu)",
+  watchparty: "🍿 Start group watch party (.watchparty start)",
+  waifu: "💖 Claim an anime character (.waifu <character>)",
+  badwordadd: "🚫 Add bad words (.badword add word1,word2)",
+  badwordremove: "❌ Remove bad words (.badword remove word1,word2)",
+  badwordlist: "📋 Show bad words list (.badword list)",
+  welcomeedit: "📝 Edit welcome message (.welcome edit <text>)",
+  salutationedit: "✏️ Edit farewell message (.salutation edit <text>)",
+  stickers: "🖌 Convert image to sticker (/kiroflix .stickers on image)",
 };
 // -------------------- LOCAL CACHE --------------------
 let groupCommandsCache = {}; 
@@ -3624,91 +3634,133 @@ async function loadAllGroupRanks() {
   }
 }
 // Add a rank (unique or points-based)
-async function addRank(groupId, rankName, options = {}) {
-  try {
-    const res = await axios.post("https://kiroflix.site/backend/add_rank.php", {
-      group_id: groupId,
-      rank_name: rankName,
-      min_points: options.minPoints || null,
-      position: options.position || null,
-      unique_rank: options.uniqueRank ? 1 : 0,
-    });
+async function addRank(groupId,name,opt={}){
 
-    if (res.data.success) {
-      // Update cache
-      if (!groupRanks[groupId]) groupRanks[groupId] = [];
-      groupRanks[groupId].push({
-        rank_name: rankName,
-        min_points: options.minPoints || null,
-        position: options.position || null,
-        unique_rank: options.uniqueRank ? 1 : 0,
-      });
+  try{
+
+    const res = await axios.post(
+      "https://kiroflix.site/backend/add_rank.php",
+      {
+        group_id:groupId,
+        rank_name:name,
+        min_points:opt.minPoints ?? null,
+        position:opt.position ?? null,
+        unique_rank:opt.uniqueRank ? 1 : 0
+      }
+    );
+
+    if(res.data.success){
+      await getRanks(groupId,true); // refresh cache
     }
 
     return res.data;
-  } catch (err) {
-    console.error("❌ addRank error:", err.message);
-    return { success: false, error: err.message };
-  }
-}
 
+  }catch(err){
+
+    return {
+      success:false,
+      error:err.response?.data?.error || err.message
+    };
+
+  }
+
+}
 // Delete a rank
-async function deleteRank(groupId, rankName) {
-  try {
-    const res = await axios.post("https://kiroflix.site/backend/delete_rank.php", {
-      group_id: groupId,
-      rank_name: rankName
-    });
+async function deleteRank(groupId,name){
 
-    if (res.data.success && groupRanks[groupId]) {
-      groupRanks[groupId] = groupRanks[groupId].filter(r => r.rank_name !== rankName);
+  try{
+
+    const res = await axios.post(
+      "https://kiroflix.site/backend/delete_rank.php",
+      {
+        group_id:groupId,
+        rank_name:name
+      }
+    );
+
+    if(res.data.success){
+      await getRanks(groupId,true);
     }
 
     return res.data;
-  } catch (err) {
-    console.error("❌ deleteRank error:", err.message);
-    return { success: false, error: err.message };
-  }
-}
 
-async function getRanks(groupId, forceRefresh = false) {
-  if (!forceRefresh && groupRanks[groupId]?.length) {
+  }catch(err){
+
+    return {
+      success:false,
+      error:err.response?.data?.error || err.message
+    };
+
+  }
+
+}
+async function getRanks(groupId, force=false){
+
+  if(!force && groupRanks[groupId]){
     return groupRanks[groupId];
   }
 
-  try {
-    const res = await axios.get("https://kiroflix.site/backend/get_ranks.php", {
-      params: { group_id: groupId }
-    });
-    const ranks = res.data.success ? res.data.data : [];
-    groupRanks[groupId] = ranks; // update cache
+  try{
+
+    const res = await axios.get(
+      "https://kiroflix.site/backend/get_ranks.php",
+      { params:{ group_id: groupId } }
+    );
+
+    const ranks = res.data?.data || [];
+
+    groupRanks[groupId] = ranks;
+
     return ranks;
-  } catch (err) {
-    console.error("❌ getRanks error:", err.message);
+
+  }catch(err){
+
+    console.error("getRanks error:",err.message);
+
     return [];
+
   }
+
 }
-async function getUserRank(groupId, userScore) {
-  const ranks = await getRanks(groupId); // uses cache now
+async function getUserRank(groupId,userId,userScore){
 
-  if (!ranks.length) return null;
+  const ranks = await getRanks(groupId);
 
-  // Unique leaderboard ranks
-  const uniqueRanks = ranks.filter(r => r.unique_rank && r.position)
-                           .sort((a,b) => a.position - b.position);
+  if(!ranks.length) return null;
 
-  if (uniqueRanks.length && uniqueRanks[0].position === 1) return uniqueRanks[0].rank_name;
+  const users = messageStats[groupId]?.users || {};
 
-  // Point-based ranks
+  const leaderboard =
+    Object.entries(users)
+    .sort((a,b)=>b[1]-a[1]);
+
+  const position =
+    leaderboard.findIndex(u=>u[0]===userId)+1;
+
+  // Unique ranks
+  for(const r of ranks){
+
+    if(r.unique_rank && r.position===position){
+      return r.rank_name;
+    }
+
+  }
+
+  // Point ranks
   const pointRanks = ranks
-    .filter(r => !r.unique_rank && r.min_points)
-    .sort((a,b) => b.min_points - a.min_points);
+    .filter(r=>!r.unique_rank && r.min_points)
+    .sort((a,b)=>b.min_points-a.min_points);
 
-  for (const r of pointRanks) {
-    if (userScore >= r.min_points) return r.rank_name;
+  for(const r of pointRanks){
+
+    if(userScore>=r.min_points){
+      return r.rank_name;
+    }
+
   }
 
   return null;
+
 }
 // 🔹 Cached waifus per group
 
@@ -3860,41 +3912,66 @@ if (["add","invite"].includes(update.action)) {
 }
 
     // -------------------- WELCOME --------------------
-    if (["add","invite"].includes(update.action)) {
-      const template = welcomeCache[groupId];
-      if (!template) return;
-      for (const participant of update.participants) {
+if (["add","invite"].includes(update.action)) {
+  const template = welcomeCache[groupId];
+  if (!template) return;
 
-  const userJid = typeof participant === "string" ? participant : participant?.id;
-  if (!userJid) continue;
+  // Get group icon once
+  let groupIconUrl = null;
+  try {
+    groupIconUrl = await sock.profilePictureUrl(groupId, "image");
+  } catch {
+    // no group icon, fallback to text-only
+    groupIconUrl = null;
+  }
 
-  // -------------------- CLEAR CACHE --------------------
-  if (protectionCache.messages?.[groupId]?.[userJid])
-    delete protectionCache.messages[groupId][userJid];
+  for (const participant of update.participants) {
 
-  if (protectionCache.stickers?.[userJid])
-    delete protectionCache.stickers[userJid];
+    const userJid = typeof participant === "string" ? participant : participant?.id;
+    if (!userJid) continue;
 
-  if (protectionCache.slowmode?.[userJid])
-    delete protectionCache.slowmode[userJid];
-  if (floodWarnings?.[groupId]?.[userJid]) {
-  delete floodWarnings[groupId][userJid];
-}
+    // -------------------- CLEAR CACHE --------------------
+    if (protectionCache.messages?.[groupId]?.[userJid])
+      delete protectionCache.messages[groupId][userJid];
 
-  if (warningCache?.[groupId]?.[userJid])
-    delete warningCache[groupId][userJid];
-        if (!userJid) continue;
-        const username = userJid.split("@")[0];
-        const message = template.replace("{user}", `✦「 @${username} 」`);
+    if (protectionCache.stickers?.[userJid])
+      delete protectionCache.stickers[userJid];
 
-        try {
-          const profilePic = await sock.profilePictureUrl(userJid, "image");
-          await sock.sendMessage(groupId, { image:{url:profilePic}, caption: message, mentions:[userJid] });
-        } catch {
-          await sock.sendMessage(groupId, { text: message, mentions:[userJid] });
-        }
+    if (protectionCache.slowmode?.[userJid])
+      delete protectionCache.slowmode[userJid];
+
+    if (floodWarnings?.[groupId]?.[userJid])
+      delete floodWarnings[groupId][userJid];
+
+    if (warningCache?.[groupId]?.[userJid])
+      delete warningCache[groupId][userJid];
+
+    const username = userJid.split("@")[0];
+    const message = template.replace("{user}", `✦「 @${username} 」`);
+
+    // -------------------- SEND MESSAGE --------------------
+    try {
+      if (groupIconUrl) {
+        await sock.sendMessage(groupId, {
+          image: { url: groupIconUrl },
+          caption: message,
+          mentions: [userJid],
+        });
+      } else {
+        await sock.sendMessage(groupId, {
+          text: message,
+          mentions: [userJid],
+        });
       }
+    } catch {
+      // fallback if sending image fails
+      await sock.sendMessage(groupId, {
+        text: message,
+        mentions: [userJid],
+      });
     }
+  }
+}
 
     // -------------------- FAREWELL --------------------
     // -------------------- FAREWELL --------------------
@@ -4291,25 +4368,23 @@ if (isGroup && text.toLowerCase() === "/kiroflix .leaderboard") {
   return;
 }
 // /kiroflix .myrank
-if (text.toLowerCase() === "/kiroflix .myrank") {
-  const userId = msg.key.participant || msg.key.remoteJid;
+if(text==="/kiroflix .myrank"){
 
-  const userScore = messageStats[from]?.users[userId] || 0;
+const userId = msg.key.participant || msg.key.remoteJid;
 
-  const rankName = await getUserRank(from, userScore);
+const score = messageStats[from]?.users[userId] || 0;
 
-  const username = userId.split("@")[0];
+const rank = await getUserRank(from,userId,score);
 
-  const msgText = rankName
-    ? `🏅 @${username} — ${userScore} pts\nYour rank: *${rankName}*`
-    : `🏅 @${username} — ${userScore} pts\nNo rank assigned yet.`;
+const name = userId.split("@")[0];
 
-  await sock.sendMessage(from, {
-    text: msgText,
-    mentions: [userId]
-  });
+await sock.sendMessage(from,{
+text:rank
+? `🏅 @${name}\nPoints: ${score}\nRank: *${rank}*`
+: `🏅 @${name}\nPoints: ${score}\nNo rank yet.`,
+mentions:[userId]
+});
 
-  return;
 }
 
 
@@ -4339,48 +4414,52 @@ if (text.toLowerCase() === "/kiroflix .ranklist") {
 
 
 // /kiroflix .rank add
-if (text.toLowerCase().startsWith("/kiroflix .rank add")) {
-  const sender = msg.key.participant || msg.key.remoteJid;
-  const admins = await getGroupAdmins(sock, from);
+if(text.toLowerCase().startsWith("/kiroflix .rank add")){
 
-  if (!admins.includes(sender)) {
-    await sock.sendMessage(from, { 
-      text: "❌ Only admins can add ranks.", 
-      mentions: [sender] 
-    });
-    return;
-  }
+const sender = msg.key.participant || msg.key.remoteJid;
+const admins = await getGroupAdmins(sock,from);
 
-  const parts = text.split(" ");
+if(!admins.includes(sender)){
+ await sock.sendMessage(from,{text:"❌ Admin only"});
+ return;
+}
 
-  const rankName = parts[3];     // correct
-  const args = parts.slice(4);   // remaining arguments
+const cmd = text.replace("/kiroflix .rank add","").trim();
 
-  const positionIndex = args.findIndex(a => a.toLowerCase() === "position");
-  const pointsIndex = args.findIndex(a => a.toLowerCase() === "points");
-  const unique = args.includes("unique");
+const match = cmd.match(/"([^"]+)"|(\S+)/);
 
-  const options = {};
+if(!match){
+ await sock.sendMessage(from,{text:"❌ Rank name required"});
+ return;
+}
 
-  if (positionIndex !== -1 && args[positionIndex + 1]) {
-    options.position = parseInt(args[positionIndex + 1]);
-  }
+const rankName = match[1] || match[2];
 
-  if (pointsIndex !== -1 && args[pointsIndex + 1]) {
-    options.minPoints = parseInt(args[pointsIndex + 1]);
-  }
+const args = cmd.replace(match[0],"").trim().split(" ");
 
-  options.uniqueRank = unique;
+let options = {};
 
-  const result = await addRank(from, rankName, options);
+for(let i=0;i<args.length;i++){
 
-  await sock.sendMessage(from, {
-    text: result.success
-      ? `✅ Rank ${rankName} added.`
-      : `❌ Failed: ${result.error}`
-  });
+ if(args[i]==="points"){
+   options.minPoints = parseInt(args[i+1]);
+ }
 
-  return;
+ if(args[i]==="position"){
+   options.position = parseInt(args[i+1]);
+   options.uniqueRank = true;
+ }
+
+}
+
+const res = await addRank(from,rankName,options);
+
+await sock.sendMessage(from,{
+ text:res.success
+ ? `✅ Rank added: ${rankName}`
+ : `❌ ${res.error}`
+});
+
 }
 
 // /kiroflix .rank delete
