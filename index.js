@@ -80,6 +80,7 @@ const toggledCommands = {
   antiflood: "⚡ Anti flood protection (.antiflood on/off)",
   antilinks: "🔗 Block links (.antilinks on/off)",
   antiraid: "🛡 Anti raid protection (.antiraid on/off)",
+  antibadwords: "🚫 Block messages containing banned words (.antibadwords on/off)",
   antimention: "📢 Block mention spam (.antimention on/off)",
   antisticker: "🧩 Prevent sticker spam (.antisticker on/off)",
   raidlock: "🔒 Auto lock group during raid (.raidlock on/off)",
@@ -3433,7 +3434,7 @@ async function pushStatsToBackend() {
 
     }
 
-    if (!payload.length) return;
+    if (!payload.length || payload.length > 5000) return;
 
     await axios.post(
       "https://kiroflix.site/backend/save_message_stats.php",
@@ -3444,8 +3445,11 @@ async function pushStatsToBackend() {
 
     // reset cache after sending
     for (const groupId in messageStats) {
-      messageStats[groupId].users = {};
-    }
+  messageStats[groupId] = {
+    total: 0,
+    users: {}
+  };
+}
 
   } catch (err) {
 
@@ -3476,7 +3480,9 @@ async function fetchMessageStats() {
 
       messageStats[group_id].users[user_id] = messages;
 
-      messageStats[group_id].total += messages;
+      messageStats[group_id].total =
+Object.values(messageStats[group_id].users)
+.reduce((a,b)=>a+b,0);
     }
 
     console.log("📊 Message stats loaded");
@@ -3512,6 +3518,67 @@ async function fetchFarewellMessages() {
     console.error("❌ Failed loading farewell messages", err);
   }
 }
+const BADWORDS_FILE = path.join(__dirname, "groupBadWords.json");
+
+let badWordsDB = loadBadWords();
+
+function loadBadWords() {
+  try {
+    if (!fs.existsSync(BADWORDS_FILE)) {
+      fs.writeFileSync(BADWORDS_FILE, JSON.stringify({ groups:{} }, null, 2));
+    }
+    return JSON.parse(fs.readFileSync(BADWORDS_FILE));
+  } catch {
+    return { groups:{} };
+  }
+}
+
+function saveBadWords() {
+  fs.writeFileSync(BADWORDS_FILE, JSON.stringify(badWordsDB, null, 2));
+}
+async function fetchGroupBadWords(){
+
+try{
+
+const {data} = await axios.get(
+"https://kiroflix.site/backend/get_badwords.php"
+);
+
+if(!data.success) return;
+
+data.data.forEach(row=>{
+
+badWordsDB.groups[row.group_id] = row.words;
+
+});
+
+saveBadWords();
+
+console.log("🚫 Bad words loaded");
+
+}catch(e){
+console.log("Failed loading bad words");
+}
+
+}
+function containsBadWord(groupId,text){
+
+const words = badWordsDB.groups[groupId];
+
+if(!words || !words.length) return false;
+
+const msg = text.toLowerCase();
+
+return words.some(w=>{
+
+const word = w.toLowerCase().trim();
+
+return msg.includes(word);
+
+});
+
+}
+
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
@@ -3534,6 +3601,7 @@ async function startBot() {
     if (connection === "open") {
       console.log("✅ WhatsApp connected");
       qrCodeDataURL = null; // clear QR
+      await fetchGroupBadWords();
       setInterval(()=>{
   saveDB(protectionDB);
 },20000);
@@ -3678,20 +3746,34 @@ if (["add","invite"].includes(update.action)) {
 
     // -------------------- FAREWELL --------------------
     // -------------------- FAREWELL --------------------
+// -------------------- FAREWELL --------------------
 if (["remove","leave"].includes(update.action)) {
+
   const template = goodbyeCache[groupId];
   if (!template) return;
 
   for (const participant of update.participants) {
-    const userJid = typeof participant === "string" ? participant : participant?.id;
+
+    const userJid = typeof participant === "string"
+      ? participant
+      : participant?.id;
+
     if (!userJid) continue;
 
-    // Send the farewell message as-is (no username, no mentions)
-    await sock.sendMessage(userJid, {
-      text: template
+    const username = userJid.split("@")[0];
+
+    // Replace {user} placeholder
+    const message = template.replace(
+      "{user}",
+      `✦「 @${username} 」`
+    );
+
+    await sock.sendMessage(groupId,{
+      text: message,
+      mentions:[userJid]
     });
 
-    console.log(`👋 Farewell sent privately to ${userJid}`);
+    console.log(`👋 Farewell sent in group for ${userJid}`);
   }
 }
 
@@ -3730,7 +3812,29 @@ if (isGroup && isUserBanned(from, userId)) {
       "";
     if (!text) return;
     text = text.trim();
+    // -------------------- ANTIBADWORDS --------------------
+
+if(settings.antibadwords === "on"){
+
+if(containsBadWord(from,text)){
+
+try{
+
+await sock.sendMessage(from,{delete:msg.key});
+
+await sock.sendMessage(from,{
+text:`🚫 @${userId.split("@")[0]} message removed (bad word detected)`,
+mentions:[userId]
+});
+
+}catch{}
+
+return; // stop message processing
+}
+
+}
     if(isGroup && guessAnimeGames[from]){
+      
 
 const game = guessAnimeGames[from];
 const round = game.rounds[game.currentRound];
@@ -4123,7 +4227,7 @@ No one else can claim this waifu now.`,
   return;
 }
 // -------------------- KICK COMMAND --------------------
-if (isGroup && text.toLowerCase().startsWith("/kiroflix .kick ")) {
+if (isGroup && text.toLowerCase().startsWith(".kick ")) {
   const sender = msg.key.participant || msg.key.remoteJid;
 
   // 1️⃣ Only admins can use
@@ -4172,6 +4276,108 @@ if (isGroup && text.toLowerCase().startsWith("/kiroflix .kick ")) {
     if (isGroup) {
       if (!text.toLowerCase().startsWith("/kiroflix")) return;
       text = text.replace(/^\/kiroflix/i, "").trim();
+      if(isGroup && text.startsWith(".badword add")){
+
+const sender = msg.key.participant || msg.key.remoteJid;
+
+const admins = await getGroupAdmins(sock,from);
+
+if(!admins.includes(sender)){
+await sock.sendMessage(from,{text:"❌ Only admins"});
+return;
+}
+
+let words = text.replace(".badword add","").trim();
+
+if(!words) return;
+
+words = words.split(",").map(w=>w.trim().toLowerCase());
+
+if(!badWordsDB.groups[from])
+badWordsDB.groups[from] = [];
+
+words.forEach(w=>{
+
+if(!badWordsDB.groups[from].includes(w))
+badWordsDB.groups[from].push(w);
+
+});
+
+saveBadWords();
+
+await axios.post(
+"https://kiroflix.site/backend/add_badwords.php",
+{
+group_id:from,
+words
+}
+);
+
+await sock.sendMessage(from,{
+text:`✅ Added bad words:\n${words.join(", ")}`
+});
+
+return;
+
+}
+if(isGroup && text.startsWith(".badword remove")){
+
+const sender = msg.key.participant || msg.key.remoteJid;
+
+const admins = await getGroupAdmins(sock,from);
+
+if(!admins.includes(sender)){
+await sock.sendMessage(from,{text:"❌ Only admins"});
+return;
+}
+
+let words = text.replace(".badword remove","").trim();
+
+words = words.split(",").map(w=>w.trim().toLowerCase());
+
+if(!badWordsDB.groups[from]) return;
+
+badWordsDB.groups[from] =
+badWordsDB.groups[from].filter(w=>!words.includes(w));
+
+saveBadWords();
+
+await axios.post(
+"https://kiroflix.site/backend/remove_badwords.php",
+{
+group_id:from,
+words
+}
+);
+
+await sock.sendMessage(from,{
+text:`❌ Removed:\n${words.join(", ")}`
+});
+
+return;
+
+}
+if(isGroup && text === ".badword list"){
+
+const words = badWordsDB.groups[from] || [];
+
+if(!words.length){
+
+await sock.sendMessage(from,{
+text:"🚫 No bad words configured"
+});
+
+return;
+
+}
+
+await sock.sendMessage(from,{
+text:`🚫 Bad Words List\n\n${words.join("\n")}`
+});
+
+return;
+
+}
       if (isGroup && text.startsWith(".salutation edit")) {
 
   const sender = msg.key.participant || msg.key.remoteJid;
