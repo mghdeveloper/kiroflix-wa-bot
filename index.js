@@ -4294,7 +4294,6 @@ if (isGroup && text.toLowerCase() === "/kiroflix .leaderboard") {
 if (text.toLowerCase() === "/kiroflix .myrank") {
   const userId = msg.key.participant || msg.key.remoteJid;
 
-  // Fetch user score from your messageStats or leaderboard
   const userScore = messageStats[from]?.users[userId] || 0;
 
   const rankName = await getUserRank(from, userScore);
@@ -4309,7 +4308,10 @@ if (text.toLowerCase() === "/kiroflix .myrank") {
     text: msgText,
     mentions: [userId]
   });
+
+  return;
 }
+
 
 // /kiroflix .ranklist
 if (text.toLowerCase() === "/kiroflix .ranklist") {
@@ -4331,20 +4333,29 @@ if (text.toLowerCase() === "/kiroflix .ranklist") {
   });
 
   await sock.sendMessage(from, { text: message });
+
+  return;
 }
-// /kiroflix .rank add King position 1 unique
-// /kiroflix .rank add Soldier points 100
+
+
+// /kiroflix .rank add
 if (text.toLowerCase().startsWith("/kiroflix .rank add")) {
   const sender = msg.key.participant || msg.key.remoteJid;
   const admins = await getGroupAdmins(sock, from);
 
   if (!admins.includes(sender)) {
-    await sock.sendMessage(from, { text: "❌ Only admins can add ranks.", mentions: [sender] });
+    await sock.sendMessage(from, { 
+      text: "❌ Only admins can add ranks.", 
+      mentions: [sender] 
+    });
     return;
   }
 
-  const args = text.split(" ").slice(4); // after .rank add
-  const rankName = args[0];
+  const parts = text.split(" ");
+
+  const rankName = parts[3];     // correct
+  const args = parts.slice(4);   // remaining arguments
+
   const positionIndex = args.findIndex(a => a.toLowerCase() === "position");
   const pointsIndex = args.findIndex(a => a.toLowerCase() === "points");
   const unique = args.includes("unique");
@@ -4363,23 +4374,39 @@ if (text.toLowerCase().startsWith("/kiroflix .rank add")) {
 
   const result = await addRank(from, rankName, options);
 
-  await sock.sendMessage(from, { text: result.success ? `✅ Rank ${rankName} added.` : `❌ Failed: ${result.error}` });
+  await sock.sendMessage(from, {
+    text: result.success
+      ? `✅ Rank ${rankName} added.`
+      : `❌ Failed: ${result.error}`
+  });
+
+  return;
 }
 
-// /kiroflix .rank delete King
+// /kiroflix .rank delete
 if (text.toLowerCase().startsWith("/kiroflix .rank delete")) {
   const sender = msg.key.participant || msg.key.remoteJid;
   const admins = await getGroupAdmins(sock, from);
 
   if (!admins.includes(sender)) {
-    await sock.sendMessage(from, { text: "❌ Only admins can delete ranks.", mentions: [sender] });
+    await sock.sendMessage(from, {
+      text: "❌ Only admins can delete ranks.",
+      mentions: [sender]
+    });
     return;
   }
 
   const rankName = text.split(" ").slice(4).join(" ");
+
   const result = await deleteRank(from, rankName);
 
-  await sock.sendMessage(from, { text: result.success ? `✅ Rank ${rankName} deleted.` : `❌ Failed: ${result.error}` });
+  await sock.sendMessage(from, {
+    text: result.success
+      ? `✅ Rank ${rankName} deleted.`
+      : `❌ Failed: ${result.error}`
+  });
+
+  return;
 }
  // 💖 WAIFU CLAIM
 // 💖 Claim waifu
@@ -4493,29 +4520,29 @@ if (isGroup && text.toLowerCase().startsWith(".kick ")) {
     if (isGroup) {
       if (!text.toLowerCase().startsWith("/kiroflix")) return;
       text = text.replace(/^\/kiroflix/i, "").trim();
-      if(isGroup && text.startsWith(".badword add")){
+      if (isGroup && text.startsWith(".badword add")) {
 
 const sender = msg.key.participant || msg.key.remoteJid;
 
-const admins = await getGroupAdmins(sock,from);
+const admins = await getGroupAdmins(sock, from);
 
-if(!admins.includes(sender)){
+if (!admins.includes(sender)) {
 await sock.sendMessage(from,{text:"❌ Only admins"});
 return;
 }
 
 let words = text.replace(".badword add","").trim();
 
-if(!words) return;
+if (!words) return;
 
-words = words.split(",").map(w=>w.trim().toLowerCase());
+words = words.split(",").map(w => w.trim().toLowerCase());
 
-if(!badWordsDB.groups[from])
+if (!badWordsDB.groups[from])
 badWordsDB.groups[from] = [];
 
-words.forEach(w=>{
+words.forEach(w => {
 
-if(!badWordsDB.groups[from].includes(w))
+if (!badWordsDB.groups[from].includes(w))
 badWordsDB.groups[from].push(w);
 
 });
@@ -4525,8 +4552,9 @@ saveBadWords();
 await axios.post(
 "https://kiroflix.site/backend/add_badwords.php",
 {
-group_id:from,
-words
+group_id: from,
+words: words,
+admin_id: sender   // ⭐ FIX: send admin id
 }
 );
 
