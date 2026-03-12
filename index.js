@@ -3599,7 +3599,136 @@ return msg.includes(word);
 });
 
 }
+// Global object to cache ranks per group
+const groupRanks = {}; 
+// Structure:
+// {
+//   "groupId@g.us": [
+//      { rank_name, min_points, position, unique_rank }
+//   ]
+// }
+async function loadAllGroupRanks() {
+  console.log("📥 Loading all group ranks from backend...");
 
+  const groupIds = Object.keys(groupActivity); // or list of groups bot is in
+
+  for (const groupId of groupIds) {
+    try {
+      const ranks = await getRanks(groupId);
+      groupRanks[groupId] = ranks;
+      console.log(`✅ Loaded ${ranks.length} ranks for group ${groupId}`);
+    } catch (err) {
+      console.error(`❌ Failed to load ranks for ${groupId}:`, err.message);
+      groupRanks[groupId] = [];
+    }
+  }
+}
+// Add a rank (unique or points-based)
+async function addRank(groupId, rankName, options = {}) {
+  try {
+    const res = await axios.post("https://kiroflix.site/backend/add_rank.php", {
+      group_id: groupId,
+      rank_name: rankName,
+      min_points: options.minPoints || null,
+      position: options.position || null,
+      unique_rank: options.uniqueRank ? 1 : 0,
+    });
+
+    if (res.data.success) {
+      // Update cache
+      if (!groupRanks[groupId]) groupRanks[groupId] = [];
+      groupRanks[groupId].push({
+        rank_name: rankName,
+        min_points: options.minPoints || null,
+        position: options.position || null,
+        unique_rank: options.uniqueRank ? 1 : 0,
+      });
+    }
+
+    return res.data;
+  } catch (err) {
+    console.error("❌ addRank error:", err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+// Delete a rank
+async function deleteRank(groupId, rankName) {
+  try {
+    const res = await axios.post("https://kiroflix.site/backend/delete_rank.php", {
+      group_id: groupId,
+      rank_name: rankName
+    });
+
+    if (res.data.success && groupRanks[groupId]) {
+      groupRanks[groupId] = groupRanks[groupId].filter(r => r.rank_name !== rankName);
+    }
+
+    return res.data;
+  } catch (err) {
+    console.error("❌ deleteRank error:", err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+async function getRanks(groupId, forceRefresh = false) {
+  if (!forceRefresh && groupRanks[groupId]?.length) {
+    return groupRanks[groupId];
+  }
+
+  try {
+    const res = await axios.get("https://kiroflix.site/backend/get_ranks.php", {
+      params: { group_id: groupId }
+    });
+    const ranks = res.data.success ? res.data.data : [];
+    groupRanks[groupId] = ranks; // update cache
+    return ranks;
+  } catch (err) {
+    console.error("❌ getRanks error:", err.message);
+    return [];
+  }
+}
+async function getUserRank(groupId, userScore) {
+  const ranks = await getRanks(groupId); // uses cache now
+
+  if (!ranks.length) return null;
+
+  // Unique leaderboard ranks
+  const uniqueRanks = ranks.filter(r => r.unique_rank && r.position)
+                           .sort((a,b) => a.position - b.position);
+
+  if (uniqueRanks.length && uniqueRanks[0].position === 1) return uniqueRanks[0].rank_name;
+
+  // Point-based ranks
+  const pointRanks = ranks
+    .filter(r => !r.unique_rank && r.min_points)
+    .sort((a,b) => b.min_points - a.min_points);
+
+  for (const r of pointRanks) {
+    if (userScore >= r.min_points) return r.rank_name;
+  }
+
+  return null;
+}
+// 🔹 Cached waifus per group
+
+// Fetch waifus from backend for a group
+async function fetchWaifus(groupId) {
+  try {
+    const res = await axios.get("https://kiroflix.site/backend/get_waifus.php", {
+      params: { group_id: groupId }
+    });
+    const data = res.data.success ? res.data.data : [];
+    waifuClaims[groupId] = {};
+    data.forEach(w => {
+      const key = w.character_name.toLowerCase().replace(/\s+/g, "");
+      waifuClaims[groupId][key] = w.user_id;
+    });
+  } catch (err) {
+    console.error("❌ Failed to fetch waifus:", err.message);
+    waifuClaims[groupId] = {};
+  }
+}
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
@@ -3630,8 +3759,10 @@ async function startBot() {
       await fetchWelcomeMessages();
       await fetchMessageStats();
       await fetchFarewellMessages(); // 👈 add this
+      setInterval(loadAllGroupRanks, 10 * 60 * 1000);
 
-setInterval(pushStatsToBackend, 120000); // 5 minutes
+// Push group stats to backend every 5 minutes
+setInterval(pushStatsToBackend, 300000); // 5 minutes
       // 🔹 Run immediately on startup
   checkNewEpisodes(sock);
   checkNewChapters(sock);
@@ -4159,73 +4290,158 @@ if (isGroup && text.toLowerCase() === "/kiroflix .leaderboard") {
 
   return;
 }
+// /kiroflix .myrank
+if (text.toLowerCase() === "/kiroflix .myrank") {
+  const userId = msg.key.participant || msg.key.remoteJid;
+
+  // Fetch user score from your messageStats or leaderboard
+  const userScore = messageStats[from]?.users[userId] || 0;
+
+  const rankName = await getUserRank(from, userScore);
+
+  const username = userId.split("@")[0];
+
+  const msgText = rankName
+    ? `🏅 @${username} — ${userScore} pts\nYour rank: *${rankName}*`
+    : `🏅 @${username} — ${userScore} pts\nNo rank assigned yet.`;
+
+  await sock.sendMessage(from, {
+    text: msgText,
+    mentions: [userId]
+  });
+}
+
+// /kiroflix .ranklist
+if (text.toLowerCase() === "/kiroflix .ranklist") {
+  const ranks = await getRanks(from);
+
+  if (!ranks.length) {
+    await sock.sendMessage(from, { text: "📜 No ranks configured yet." });
+    return;
+  }
+
+  let message = "📜 *Group Ranks*\n\n";
+
+  ranks.forEach(r => {
+    if (r.unique_rank && r.position) {
+      message += `👑 ${r.position}️⃣ ${r.rank_name} (Unique)\n`;
+    } else if (!r.unique_rank && r.min_points) {
+      message += `🪖 ${r.rank_name} — ${r.min_points} pts\n`;
+    }
+  });
+
+  await sock.sendMessage(from, { text: message });
+}
+// /kiroflix .rank add King position 1 unique
+// /kiroflix .rank add Soldier points 100
+if (text.toLowerCase().startsWith("/kiroflix .rank add")) {
+  const sender = msg.key.participant || msg.key.remoteJid;
+  const admins = await getGroupAdmins(sock, from);
+
+  if (!admins.includes(sender)) {
+    await sock.sendMessage(from, { text: "❌ Only admins can add ranks.", mentions: [sender] });
+    return;
+  }
+
+  const args = text.split(" ").slice(4); // after .rank add
+  const rankName = args[0];
+  const positionIndex = args.findIndex(a => a.toLowerCase() === "position");
+  const pointsIndex = args.findIndex(a => a.toLowerCase() === "points");
+  const unique = args.includes("unique");
+
+  const options = {};
+
+  if (positionIndex !== -1 && args[positionIndex + 1]) {
+    options.position = parseInt(args[positionIndex + 1]);
+  }
+
+  if (pointsIndex !== -1 && args[pointsIndex + 1]) {
+    options.minPoints = parseInt(args[pointsIndex + 1]);
+  }
+
+  options.uniqueRank = unique;
+
+  const result = await addRank(from, rankName, options);
+
+  await sock.sendMessage(from, { text: result.success ? `✅ Rank ${rankName} added.` : `❌ Failed: ${result.error}` });
+}
+
+// /kiroflix .rank delete King
+if (text.toLowerCase().startsWith("/kiroflix .rank delete")) {
+  const sender = msg.key.participant || msg.key.remoteJid;
+  const admins = await getGroupAdmins(sock, from);
+
+  if (!admins.includes(sender)) {
+    await sock.sendMessage(from, { text: "❌ Only admins can delete ranks.", mentions: [sender] });
+    return;
+  }
+
+  const rankName = text.split(" ").slice(4).join(" ");
+  const result = await deleteRank(from, rankName);
+
+  await sock.sendMessage(from, { text: result.success ? `✅ Rank ${rankName} deleted.` : `❌ Failed: ${result.error}` });
+}
  // 💖 WAIFU CLAIM
+// 💖 Claim waifu
 if (isGroup && text.toLowerCase().startsWith("/kiroflix .waifu ")) {
 
-  // Check if waifu system is enabled
-  if (groupCommandsCache[from]?.waifu === "off") {
-    await sock.sendMessage(from, {
-      text: "❌ Waifu system is disabled in this group."
-    });
-    return;
-  }
+  if (groupCommandsCache[from]?.waifu === "off") return await sock.sendMessage(from,{ text:"❌ Waifu system is disabled." });
 
   const user = msg.key.participant || msg.key.remoteJid;
+  const characterName = text.slice(17).trim();
+  if (!characterName) return await sock.sendMessage(from,{ text:"Usage:\n/kiroflix .waifu <character name>" });
 
-  // 🔹 Extract full character name after "/kiroflix .waifu "
-  const characterName = text.slice(17).trim(); 
-  // 17 = length of "/kiroflix .waifu " including space
-
-  if (!characterName) {
-    await sock.sendMessage(from, {
-      text: "Usage:\n/kiroflix .waifu <character name>"
-    });
-    return;
-  }
-
-  // 🔹 Search character in anime database
   const character = await searchAnimeCharacter(characterName);
+  if (!character) return await sock.sendMessage(from,{ text:"❌ Character not found." });
 
-  if (!character) {
-    await sock.sendMessage(from, {
-      text: `❌ Character not found in anime database.`
-    });
-    return;
-  }
+  // Fetch current claims from backend if not cached
+  if (!waifuClaims[from]) await fetchWaifus(from);
 
-  // 🔹 Initialize group claim storage
-  if (!waifuClaims[from]) {
-    waifuClaims[from] = {};
-  }
+  const key = character.name.toLowerCase().replace(/\s+/g, "");
 
-  const key = character.name.toLowerCase().replace(/\s+/g, ""); 
-  // Normalize name for internal storage (ignore spaces/case)
-
-  // 🔹 Check if already claimed
   if (waifuClaims[from][key]) {
     const owner = waifuClaims[from][key];
-    await sock.sendMessage(from, {
+    return await sock.sendMessage(from,{
       text: `💔 *${character.name}* is already claimed by @${owner.split("@")[0]}`,
-      mentions: [owner]
+      mentions:[owner]
     });
-    return;
   }
 
-  // 🔹 Claim character
-  waifuClaims[from][key] = user;
+  // 🔹 Add claim to backend
+  try {
+    const res = await axios.post("https://kiroflix.site/backend/add_waifu.php", {
+      group_id: from,
+      user_id: user,
+      character_name: character.name,
+      character_image: character.image,
+      anime: character.anime
+    });
 
-  // 🔹 Send confirmation
-  await sock.sendMessage(from, {
-    image: { url: character.image },
-    caption: `💖 *@${user.split("@")[0]} claimed ${character.name}!*  
+    if (!res.data.success) throw new Error(res.data.error || "Backend error");
+
+    // Update cache
+    waifuClaims[from][key] = user;
+
+    await sock.sendMessage(from, {
+      image: { url: character.image },
+      caption: `💖 *@${user.split("@")[0]} claimed ${character.name}!*  
 
 Anime: ${character.anime}
 
 No one else can claim this waifu now.`,
-    mentions: [user]
-  });
+      mentions: [user]
+    });
+  } catch (err) {
+    console.error("❌ Failed to add waifu:", err.message);
+    await sock.sendMessage(from,{ text:"❌ Failed to claim waifu." });
+  }
 
   return;
+}
+// -------------------- BAN COMMAND --------------------
+if (isGroup && text.toLowerCase().startsWith(".ban")) {
+  await handleBanCommand(sock, msg, text);
+  return; // Stop further processing after handling .ban
 }
 // -------------------- KICK COMMAND --------------------
 if (isGroup && text.toLowerCase().startsWith(".kick ")) {
