@@ -24,6 +24,7 @@ const os = require("os");
 // Keep track of episodes already processed to avoid resending
 const processedEpisodes = new Set();
 let qrCodeDataURL = null; // store latest QR code
+let schedulerStarted = false;
 // Maximum message length allowed for processing
 const MAX_MESSAGE_LENGTH = 300; // or whatever limit you prefer
 app.get("/", async (_, res) => {
@@ -88,8 +89,11 @@ const toggledCommands = {
   mute: "🔇 Mute the bot (.mute on/off)",
   slowmode: "🐢 Enable slowmode (.slowmode 10s)",
   stickers: "🖌 Enable sticker maker (.stickers on/off)",
-  salutation: "📩 Send farewell message when member leaves (.salutation on/off)"
+  salutation: "📩 Send farewell message when member leaves (.salutation on/off)",
+  adminlog: "📢 Notify group owner when admins add/promote/demote users (.adminlog on/off)"
 };
+
+// -------------------- NON-TOGGLED COMMANDS --------------------
 const nonToggledCommands = {
   guessanime: "🎯 Anime guessing game (.guessanime start)",
   quiz: "🧠 Anime quiz (.quiz start / .quiz stop)",
@@ -98,8 +102,8 @@ const nonToggledCommands = {
   leaderboard: "🏆 Show group leaderboard (.leaderboard)",
   myrank: "🏅 Show your rank (.myrank)",
   ranklist: "📜 Show all ranks (.ranklist)",
-  rankadd: '➕ Add rank (.rank add "Rank Name" points 100 / position 1)',
-  rankdelete: "❌ Delete rank (.rank delete RankName)",
+  rankadd: '➕ Add rank (.rank add {{Rank Name}} points 100 / position 1)',
+  rankdelete: "❌ Delete rank (.rank delete {{Rank Name}})",
   stats: "📊 Show group usage stats (.stats)",
   active: "🔥 Show most active users (.active)",
   settings: "⚙ Show group settings (.settings)",
@@ -112,10 +116,15 @@ const nonToggledCommands = {
   badwordlist: "📋 Show bad words list (.badword list)",
   welcomeedit: "📝 Edit welcome message (.welcome edit <text>)",
   salutationedit: "✏️ Edit farewell message (.salutation edit <text>)",
-  stickers: "🖌 Convert image to sticker (/kiroflix .stickers on image)",
+  stickers: "🖌 Convert image to sticker (/kiroflix .stickers on image)"
 };
+
 // -------------------- LOCAL CACHE --------------------
 let groupCommandsCache = {}; 
+function randomDelay(min = 0, max = 5000) {
+  const delay = Math.floor(Math.random() * (max - min + 1)) + min;
+  return new Promise(res => setTimeout(res, delay));
+}
 // -------------------- LOGGER --------------------
 function logStep(step, data = "") {
   console.log(`\n===== ${step} =====`);
@@ -312,14 +321,55 @@ User: ${text}
     return null;
   }
 }
+function runDailyRandom(task, minDelay = 3 * 60 * 60 * 1000, maxDelay = 24 * 60 * 60 * 1000) {
+  // Ensure minDelay is never bigger than maxDelay
+  if (minDelay >= maxDelay) {
+    console.warn("minDelay >= maxDelay, adjusting maxDelay");
+    maxDelay = minDelay + 1000; // at least 1 second more
+  }
 
+  // Random delay between minDelay and maxDelay
+  const delay = Math.floor(Math.random() * (maxDelay - minDelay)) + minDelay;
+
+  setTimeout(async () => {
+    try {
+      await task();
+    } catch (err) {
+      console.error("Task error:", err);
+    }
+
+    // schedule again for the next day
+    runDailyRandom(task, minDelay, maxDelay);
+
+  }, delay);
+}
+function runHourlyRandom(task, minDelay = 15 * 60 * 1000, maxDelay = 60 * 60 * 1000) {
+  // minDelay = 15 min, maxDelay = 1 hour by default
+  if (minDelay >= maxDelay) {
+    console.warn("minDelay >= maxDelay, adjusting maxDelay");
+    maxDelay = minDelay + 1000;
+  }
+
+  const delay = Math.floor(Math.random() * (maxDelay - minDelay)) + minDelay;
+
+  setTimeout(async () => {
+    try {
+      await task();
+    } catch (err) {
+      console.error("Hourly task error:", err);
+    }
+
+    // schedule again
+    runHourlyRandom(task, minDelay, maxDelay);
+  }, delay);
+}
 // -------------------- SEARCH --------------------
 async function searchAnime(title) {
   try {
     logStep("SEARCH TITLE", title);
 
     const { data } = await axios.get(
-      "https://kiroflix.site/backend/anime_search.php",
+      "https://kiroflix.site/backend/anime_search_v1.php",
       { params: { q: title } }
     );
 
@@ -411,7 +461,7 @@ async function getEpisodes(id) {
     logStep("FETCH EPISODES FOR", id);
 
     const { data } = await axios.get(
-      "https://kiroflix.site/backend/episodes_proxy.php",
+      "https://kiroflix.site/backend/episodes_proxy_v2.php",
       { params: { id } }
     );
 
@@ -1282,7 +1332,7 @@ async function checkNewEpisodes(sock) {
     console.log("⏱ Checking for new episodes...");
 
     // 1️⃣ Fetch last released episodes
-    const { data } = await axios.get("https://kiroflix.site/backend/lastep.php", { timeout: 120000 });
+    const { data } = await axios.get("https://kiroflix.site/backend/lastep-v2.php", { timeout: 120000 });
     if (!data?.success || !data.results?.length) {
       console.log("⚠️ No new episodes fetched");
       return;
@@ -2566,7 +2616,7 @@ async function fetchGroupsFromBackend() {
         const defaultOff = [
           "games", "waifu", "antispam", "antiflood", "antilinks",
           "antiraid", "antimention", "antisticker", "raidlock",
-          "welcome", "mute", "slowmode", "stickers", "salutation", "antibadwords"
+          "welcome", "mute", "slowmode", "stickers", "salutation", "antibadwords","adminlog"
         ];
 
         // Initialize all commands
@@ -2649,8 +2699,30 @@ const protectionCache = {
   slowmode:{},
   links:{}
 };
+const linkWarnings = {};
 const linkRegex =
-/(https?:\/\/|www\.|chat\.whatsapp\.com|t\.me|discord\.gg|bit\.ly|tinyurl\.com|instagram\.com|tiktok\.com)/i;
+/(https?:\/\/|www\.|chat\.whatsapp\.com\/|wa\.me\/|t\.me\/|discord\.gg\/|discord\.com\/invite\/|bit\.ly\/|tinyurl\.com\/|goo\.gl\/|instagram\.com\/|tiktok\.com\/|youtube\.com\/|youtu\.be\/)/i;
+
+const disguisedRegex =
+/(hxxp:\/\/|hxxps:\/\/|http\s?:\/\/|https\s?:\/\/)/i;
+
+const dotRegex =
+/([a-z0-9-]+\s?(dot)\s?(com|net|org|gg|io|me))/i;
+
+const base64Regex =
+/[a-zA-Z0-9+\/]{40,}={0,2}/;
+
+const unicodeDomain =
+/xn--[a-z0-9]+/i;
+function normalizeText(text=""){
+return text
+.replace(/[*_~`]/g,"")
+.replace(/[\u200B-\u200F\u202A-\u202E]/g,"")
+.replace(/\s+/g," ")
+.trim()
+.toLowerCase();
+}
+
 async function getCachedGroupMetadata(sock, groupId) {
   if (groupMetadataCache[groupId]) return groupMetadataCache[groupId];
 
@@ -2889,28 +2961,99 @@ if (settings.antiflood === "on") {
     return;
   }
 }
-// -------------------- ANTILINKS --------------------
-
+// -------------------- ANTILINKS ULTRA --------------------
 if(settings.antilinks === "on"){
 
-if(linkRegex.test(text)){
+  const cleanText = normalizeText(text);
 
-try{
+  // WhatsApp hidden structures
+  const hasExternalPreview =
+    msg.message?.extendedTextMessage?.contextInfo?.externalAdReply;
 
-await sock.sendMessage(from,{delete:msg.key});
+  const hasInvite =
+    msg.message?.groupInviteMessage ||
+    msg.message?.groupInviteMessageV4;
 
-await sock.sendMessage(from,{
-text:`⚠️ ${mention} links are not allowed`,
-mentions:[userId]
-});
+  const hasChannelShare =
+    msg.message?.extendedTextMessage?.contextInfo?.forwardedNewsletterMessageInfo;
 
-}catch{}
+  const hasButtons =
+    msg.message?.buttonsMessage ||
+    msg.message?.templateMessage ||
+    msg.message?.interactiveMessage;
 
-return;
+  // base64 detection
+  const base64Link = base64Regex.test(cleanText);
+
+  // final detection: stickers are NOT included here
+  const hasLink =
+    linkRegex.test(cleanText) ||
+    disguisedRegex.test(cleanText) ||
+    dotRegex.test(cleanText) ||
+    unicodeDomain.test(cleanText) ||
+    base64Link ||
+    hasExternalPreview ||
+    hasInvite ||
+    hasChannelShare ||
+    hasButtons;
+
+  if(hasLink){
+
+    if(!linkWarnings[from]) linkWarnings[from] = {};
+    if(!linkWarnings[from][userId]) linkWarnings[from][userId] = 0;
+
+    linkWarnings[from][userId]++;
+
+    const warn = linkWarnings[from][userId];
+    const username = userId.split("@")[0];
+
+    try{
+      await sock.sendMessage(from,{delete:msg.key});
+    }catch{}
+
+    if(warn < 5){
+      await sock.sendMessage(from,{
+        text:
+`┏━━━ 🚫 *ANTI-LINK PROTECTION* ━━━┓
+┃
+┃ ⚠️ @${username}
+┃ Links are not allowed here.
+┃
+┃ 📊 Warning: *${warn}/5*
+┃
+┃ Please follow group rules.
+┃
+┗━━━━━━━━━━━━━━━━━━━━━━━`,
+        mentions:[userId]
+      });
+    }else{
+      await sock.sendMessage(from,{
+        text:
+`┏━━━ 🔨 *ANTI-LINK SYSTEM* ━━━┓
+┃
+┃ @${username}
+┃ exceeded the allowed warnings.
+┃
+┃ ❌ User removed from group
+┃
+┗━━━━━━━━━━━━━━━━━━━━━━━`,
+        mentions:[userId]
+      });
+
+      try{
+        await sock.groupParticipantsUpdate(from,[userId],"remove");
+      }catch{}
+
+      linkWarnings[from][userId] = 0;
+
+      if(protectionCache.messages?.[from]?.[userId])
+        delete protectionCache.messages[from][userId];
+    }
+
+    return;
+  }
+
 }
-
-}
-
 
 // -------------------- ANTIMENTION --------------------
 
@@ -3015,35 +3158,39 @@ return; // stop message processing
 
 }
 // -------------------- ANTISTICKER --------------------
-const stickerMsg =
-  msg.message?.stickerMessage ||
-  msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage ||
-  (msg.message?.documentMessage?.mimetype === "image/webp" ? msg.message.documentMessage : null);
+if (settings.antisticker === "on") {
 
-if (settings.antisticker === "on" && stickerMsg) {
-  if (!protectionCache.stickers[from]) protectionCache.stickers[from] = {};
-  if (!protectionCache.stickers[from][userId]) protectionCache.stickers[from][userId] = [];
+  const isSticker =
+    msg.message?.stickerMessage ||
+    msg.message?.documentMessage?.mimetype === "image/webp" ||
+    msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.stickerMessage;
 
-  const now = Date.now();
-  protectionCache.stickers[from][userId].push(now);
+  if (isSticker) {
 
-  // keep only last 6 seconds
-  protectionCache.stickers[from][userId] =
-    protectionCache.stickers[from][userId].filter(t => now - t < 6000);
+    const username = userId.split("@")[0];
 
-  if (protectionCache.stickers[from][userId].length >= 5) {
+    // Delete sticker immediately
+    try {
+      await sock.sendMessage(from, { delete: msg.key });
+    } catch {}
+
+    // Optional warning
     await sock.sendMessage(from, {
-      text: `⚠️ @${userId.split("@")[0]} sticker spam detected`,
+      text:
+`┏━━━ 🚫 *ANTI-STICKER PROTECTION* ━━━┓
+┃
+┃ ⚠️ @${username}
+┃ Stickers are not allowed in this group.
+┃
+┃ Please follow group rules.
+┃
+┗━━━━━━━━━━━━━━━━━━━━━━━`,
       mentions: [userId]
     });
 
-    try {
-      await sock.groupParticipantsUpdate(from, [userId], "remove"); // optional
-    } catch {}
-
-    protectionCache.stickers[from][userId] = [];
-    return;
+    return; // stop further processing
   }
+
 }
 // -------------------- SLOWMODE --------------------
 if (settings.slowmode === "on") {
@@ -3102,7 +3249,7 @@ async function sendGroupMenu(sock, from, sender) {
     const defaultOff = [
       "games", "waifu", "antispam", "antiflood", "antilinks",
       "antiraid", "antimention", "antisticker", "raidlock",
-      "welcome", "mute", "slowmode", "stickers", "salutation","antibadwords"
+      "welcome", "mute", "slowmode", "stickers", "salutation","antibadwords","adminlog"
     ];
 
     const toggledText = Object.entries(toggledCommands)
@@ -3528,11 +3675,12 @@ const goodbyeCache = {}; // groupId -> message template
 const pendingFarewellConfirm = {}; // groupId -> { user }
 async function fetchFarewellMessages() {
   try {
+
     const res = await axios.get(
       "https://kiroflix.site/backend/get_salutations.php"
     );
 
-    const rows = res.data?.data; // <- access the 'data' array from your JSON
+    const rows = res.data?.data;
 
     if (!Array.isArray(rows)) {
       console.error("❌ Invalid farewell messages response:", res.data);
@@ -3540,13 +3688,23 @@ async function fetchFarewellMessages() {
     }
 
     rows.forEach(row => {
-      goodbyeCache[row.group_id] = row.salutation_text;
+
+      goodbyeCache[row.group_id] = {
+        text: row.salutation_text || "",
+        image: row.image_url || null
+      };
+
     });
 
-    console.log("👋 Farewell messages loaded:", Object.keys(goodbyeCache).length);
+    console.log(
+      "👋 Farewell messages loaded:",
+      Object.keys(goodbyeCache).length
+    );
 
   } catch (err) {
+
     console.error("❌ Failed loading farewell messages", err);
+
   }
 }
 const BADWORDS_FILE = path.join(__dirname, "groupBadWords.json");
@@ -3592,177 +3750,26 @@ console.log("Failed loading bad words");
 }
 
 }
-function containsBadWord(groupId,text){
+function containsBadWord(groupId, text) {
 
-const words = badWordsDB.groups[groupId];
+  const words = badWordsDB.groups[groupId];
+  if (!words || !words.length) return false;
 
-if(!words || !words.length) return false;
+  const msg = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g,""); // remove symbols
 
-const msg = text.toLowerCase();
+  return words.some(w => {
 
-return words.some(w=>{
+    const word = w.toLowerCase().trim();
 
-const word = w.toLowerCase().trim();
+    const regex = new RegExp(`\\b${word}\\b`, "i");
 
-return msg.includes(word);
+    return regex.test(msg);
 
-});
-
-}
-// Global object to cache ranks per group
-const groupRanks = {}; 
-// Structure:
-// {
-//   "groupId@g.us": [
-//      { rank_name, min_points, position, unique_rank }
-//   ]
-// }
-async function loadAllGroupRanks() {
-  console.log("📥 Loading all group ranks from backend...");
-
-  const groupIds = Object.keys(groupActivity); // or list of groups bot is in
-
-  for (const groupId of groupIds) {
-    try {
-      const ranks = await getRanks(groupId);
-      groupRanks[groupId] = ranks;
-      console.log(`✅ Loaded ${ranks.length} ranks for group ${groupId}`);
-    } catch (err) {
-      console.error(`❌ Failed to load ranks for ${groupId}:`, err.message);
-      groupRanks[groupId] = [];
-    }
-  }
-}
-// Add a rank (unique or points-based)
-async function addRank(groupId,name,opt={}){
-
-  try{
-
-    const res = await axios.post(
-      "https://kiroflix.site/backend/add_rank.php",
-      {
-        group_id:groupId,
-        rank_name:name,
-        min_points:opt.minPoints ?? null,
-        position:opt.position ?? null,
-        unique_rank:opt.uniqueRank ? 1 : 0
-      }
-    );
-
-    if(res.data.success){
-      await getRanks(groupId,true); // refresh cache
-    }
-
-    return res.data;
-
-  }catch(err){
-
-    return {
-      success:false,
-      error:err.response?.data?.error || err.message
-    };
-
-  }
+  });
 
 }
-// Delete a rank
-async function deleteRank(groupId,name){
-
-  try{
-
-    const res = await axios.post(
-      "https://kiroflix.site/backend/delete_rank.php",
-      {
-        group_id:groupId,
-        rank_name:name
-      }
-    );
-
-    if(res.data.success){
-      await getRanks(groupId,true);
-    }
-
-    return res.data;
-
-  }catch(err){
-
-    return {
-      success:false,
-      error:err.response?.data?.error || err.message
-    };
-
-  }
-
-}
-async function getRanks(groupId, force=false){
-
-  if(!force && groupRanks[groupId]){
-    return groupRanks[groupId];
-  }
-
-  try{
-
-    const res = await axios.get(
-      "https://kiroflix.site/backend/get_ranks.php",
-      { params:{ group_id: groupId } }
-    );
-
-    const ranks = res.data?.data || [];
-
-    groupRanks[groupId] = ranks;
-
-    return ranks;
-
-  }catch(err){
-
-    console.error("getRanks error:",err.message);
-
-    return [];
-
-  }
-
-}
-async function getUserRank(groupId,userId,userScore){
-
-  const ranks = await getRanks(groupId);
-
-  if(!ranks.length) return null;
-
-  const users = messageStats[groupId]?.users || {};
-
-  const leaderboard =
-    Object.entries(users)
-    .sort((a,b)=>b[1]-a[1]);
-
-  const position =
-    leaderboard.findIndex(u=>u[0]===userId)+1;
-
-  // Unique ranks
-  for(const r of ranks){
-
-    if(r.unique_rank && r.position===position){
-      return r.rank_name;
-    }
-
-  }
-
-  // Point ranks
-  const pointRanks = ranks
-    .filter(r=>!r.unique_rank && r.min_points)
-    .sort((a,b)=>b.min_points-a.min_points);
-
-  for(const r of pointRanks){
-
-    if(userScore>=r.min_points){
-      return r.rank_name;
-    }
-
-  }
-
-  return null;
-
-}
-// 🔹 Cached waifus per group
 
 // Fetch waifus from backend for a group
 async function fetchWaifus(groupId) {
@@ -3780,6 +3787,103 @@ async function fetchWaifus(groupId) {
     console.error("❌ Failed to fetch waifus:", err.message);
     waifuClaims[groupId] = {};
   }
+}
+const rankCache = {};
+async function fetchRanks(){
+
+try{
+
+const res = await axios.get(
+"https://kiroflix.site/backend/get_ranks.php"
+);
+
+if(!res.data.success) return;
+
+res.data.data.forEach(r=>{
+
+if(!rankCache[r.group_id])
+rankCache[r.group_id] = [];
+
+rankCache[r.group_id].push(r);
+
+});
+
+console.log("🏅 Ranks loaded");
+
+}catch(e){
+console.log("Ranks load failed");
+}
+
+}
+function resolveRank(groupId, position, points) {
+  const ranks = rankCache[groupId];
+  if (!ranks || !ranks.length) return null;
+
+  // Check position-based rank first
+  for (const r of ranks) {
+    if (r.rank_type === "position" && r.position === Number(position)) {
+      return r.rank_name;
+    }
+  }
+
+  // Fallback to points-based rank
+  let best = null;
+  for (const r of ranks) {
+    if (r.rank_type === "points" && points >= r.min_points) {
+      if (!best || r.min_points > best.min_points) best = r;
+    }
+  }
+
+  return best ? best.rank_name : null;
+}
+async function getUserRank(groupId,userId){
+
+try{
+
+const res = await fetch(
+"https://kiroflix.site/backend/get_user_rank.php",
+{
+method:"POST",
+headers:{"Content-Type":"application/json"},
+body:JSON.stringify({
+group_id:groupId,
+user_id:userId
+})
+});
+
+const data = await res.json();
+
+if(!data.success) return null;
+
+return data;
+
+}catch(err){
+
+console.log("Rank fetch error:",err);
+
+return null;
+
+}
+
+}
+function getNextRank(groupId,points){
+
+const ranks = rankCache[groupId] || [];
+
+const pointRanks = ranks
+.filter(r=>r.rank_type==="points")
+.sort((a,b)=>a.min_points-b.min_points);
+
+for(const r of pointRanks){
+
+if(points < r.min_points){
+return r;
+}
+
+}
+
+return null;
+
 }
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
@@ -3803,49 +3907,49 @@ async function startBot() {
     if (connection === "open") {
       console.log("✅ WhatsApp connected");
       qrCodeDataURL = null; // clear QR
-      await fetchGroupBadWords();
-      setInterval(()=>{
-  saveDB(protectionDB);
-},20000);
+      
       await fetchBannedUsers();
       await fetchWelcomeMessages();
       await fetchMessageStats();
       await fetchFarewellMessages(); // 👈 add this
-      setInterval(loadAllGroupRanks, 10 * 60 * 1000);
+      await fetchRanks();
+      checkNewEpisodes(sock);
+      checkNewChapters(sock);
+      await sendDailyAnimeRecommendations(sock);
+      await sendDailyManhwaRecommendation(sock);
+      await sendDailyWallpapers(sock);
+      if (!schedulerStarted) {
 
-// Push group stats to backend every 5 minutes
-setInterval(pushStatsToBackend, 300000); // 5 minutes
-      // 🔹 Run immediately on startup
-  checkNewEpisodes(sock);
-  checkNewChapters(sock);
+  schedulerStarted = true;
 
-  // 🔹 Then run every hour
-  setInterval(() => checkNewEpisodes(sock), 3600000);
-  setInterval(() => checkNewChapters(sock), 3600000);
-    // 🧪 Run once on start
-  await sendDailyAnimeRecommendations(sock);
+  // backend jobs
+  setInterval(pushStatsToBackend, 300000);
+  await fetchGroupBadWords();
+      setInterval(()=>{
+  saveDB(protectionDB);
+},20000);
 
-  // ⏰ Run every 24 hours
-  setInterval(() => {
-    sendDailyAnimeRecommendations(sock);
-  }, 86400000);
-  // run once
-await sendDailyManhwaRecommendation(sock);
+  // random hourly
+  runHourlyRandom(() => checkNewEpisodes(sock));
+  runHourlyRandom(() => checkNewChapters(sock));
 
-// run every 24 hours
-setInterval(() => {
-  sendDailyManhwaRecommendation(sock);
-}, 86400000);
-// run once
-await sendDailyWallpapers(sock);
+  // random daily
+  runDailyRandom(() => sendDailyAnimeRecommendations(sock));
+  runDailyRandom(() => sendDailyManhwaRecommendation(sock));
+  runDailyRandom(() => sendDailyWallpapers(sock));
 
-// run every 24 hours
-setInterval(() => {
-  sendDailyWallpapers(sock);
-}, 86400000);
+}
+
+
+
+
+      
+
+
+      
 // Example: start a test anime quiz game
-  console.log("🎮 Starting test game in TEST_GROUP_ID...");
-  startAnimeGame(sock, TEST_GROUP_ID);
+  // console.log("🎮 Starting test game in TEST_GROUP_ID...");
+  // startAnimeGame(sock, TEST_GROUP_ID);
 // 🎮 Group inactivity checker
 setInterval(async () => {
 
@@ -3887,6 +3991,74 @@ setInterval(async () => {
   // -------------------- WELCOME NEW MEMBERS --------------------
 sock.ev.on("group-participants.update", async (update) => {
   const groupId = update.id;
+  // -------------------- ADMIN LOG --------------------
+if (groupCommandsCache[groupId]?.adminlog === "on") {
+
+  const metadata = await sock.groupMetadata(groupId);
+  const owner = metadata.owner || metadata.participants.find(p => p.admin === "superadmin")?.id;
+
+  for (const participant of update.participants) {
+
+    const userJid = typeof participant === "string"
+      ? participant
+      : participant?.id;
+
+    if (!userJid) continue;
+
+    const username = userJid.split("@")[0];
+
+    let logMessage = "";
+
+    if (update.action === "add") {
+      logMessage =
+`📢 Admin Activity
+
+User added: @${username}
+
+Group: ${metadata.subject}`;
+    }
+
+    else if (update.action === "remove") {
+      logMessage =
+`📢 Admin Activity
+
+User removed: @${username}
+
+Group: ${metadata.subject}`;
+    }
+
+    else if (update.action === "promote") {
+      logMessage =
+`📢 Admin Activity
+
+User promoted to admin: @${username}
+
+Group: ${metadata.subject}
+
+ℹ️ WhatsApp does not reveal which admin performed this action.`;
+    }
+
+    else if (update.action === "demote") {
+      logMessage =
+`📢 Admin Activity
+
+Admin removed: @${username}
+
+Group: ${metadata.subject}
+
+ℹ️ WhatsApp does not reveal which admin performed this action.`;
+    }
+
+    if (logMessage && owner) {
+      await sock.sendMessage(owner, {
+        text: logMessage,
+        mentions: [userJid]
+      });
+    }
+
+  }
+
+}
 
   try {
     // -------------------- ANTI RAID --------------------
@@ -3973,39 +4145,70 @@ if (["add","invite"].includes(update.action)) {
   }
 }
 
-    // -------------------- FAREWELL --------------------
-    // -------------------- FAREWELL --------------------
-// -------------------- FAREWELL --------------------
-if (["remove","leave"].includes(update.action)) {
 
-  const template = goodbyeCache[groupId];
-  if (!template) return;
+// -------------------- FAREWELL --------------------
+if (["remove", "leave"].includes(update.action)) {
+
+  const cache = goodbyeCache[groupId];
+  if (!cache) {
+    console.log("⚠️ No farewell cache for group:", groupId);
+    return;
+  }
+
+  console.log("📦 Farewell cache:", {
+    textLength: cache.text?.length,
+    hasImage: !!cache.image
+  });
 
   for (const participant of update.participants) {
 
-    const userJid = typeof participant === "string"
-      ? participant
-      : participant?.id;
-
+    const userJid = typeof participant === "string" ? participant : participant?.id;
     if (!userJid) continue;
 
     const username = userJid.split("@")[0];
+    const messageText = cache.text
+      ? cache.text.replace("{user}", `✦「 @${username} 」`)
+      : `👋 Goodbye @${username}`;
 
-    // Replace {user} placeholder
-    const message = template.replace(
-      "{user}",
-      `✦「 @${username} 」`
-    );
+    console.log("📨 Sending farewell to:", userJid);
 
-    await sock.sendMessage(groupId,{
-      text: message,
-      mentions:[userJid]
-    });
+    try {
+      let messagePayload = {};
 
-    console.log(`👋 Farewell sent in group for ${userJid}`);
+      if (cache.image) {
+        // Handle image URL or base64
+        if (cache.image.startsWith("http")) {
+          console.log("🌐 Sending farewell image via URL:", cache.image);
+          messagePayload.image = { url: cache.image };
+        } else {
+          console.log("🖼 Sending farewell image via base64");
+          const buffer = Buffer.from(cache.image, "base64");
+          console.log("📦 Image buffer size:", buffer.length);
+          messagePayload.image = buffer;
+        }
+        messagePayload.caption = messageText;
+        messagePayload.mentions = [userJid];
+      } else {
+        // Text-only fallback
+        messagePayload = {
+          text: messageText,
+          mentions: [userJid]
+        };
+      }
+
+      await sock.sendMessage(groupId, messagePayload);
+      console.log(`👋 Farewell sent in group for ${userJid}`);
+
+    } catch (err) {
+      console.error("❌ Failed sending farewell:", err);
+      // fallback to text-only
+      await sock.sendMessage(groupId, {
+        text: messageText,
+        mentions: [userJid]
+      });
+    }
   }
 }
-
   } catch (err) {
     console.error("❌ Group participants handler error:", err);
   }
@@ -4021,13 +4224,25 @@ if (["remove","leave"].includes(update.action)) {
     const from = msg.key.remoteJid;
     const isGroup = from.endsWith("@g.us");
     const userId = msg.key.participant || msg.key.remoteJid;
-    // 🚫 Skip banned users
-if (isGroup && isUserBanned(from, userId)) {
+    if (isGroup) {
+  try {
+    await handleGroupProtection(sock, msg);
+  } catch(e) {
+    console.error("Anti-spam error:", e);
+  }
+
+  groupActivity[from] = Date.now();
+
+  logMessageStat(from, userId);
+}
+    if (isGroup && isUserBanned(from, userId)) {
 
   console.log(`🚫 Ignoring banned user ${userId}`);
 
   return;
 }
+    // 🚫 Skip banned users
+
     
 
     
@@ -4041,7 +4256,135 @@ if (isGroup && isUserBanned(from, userId)) {
       "";
     if (!text) return;
     text = text.trim();
-    
+     // update last activity time
+
+if (isGroup && text.toLowerCase().startsWith(".salutation edit")) {
+
+  console.log("📢 Salutation edit command received");
+
+  const sender = msg.key.participant || msg.key.remoteJid;
+
+  try {
+
+    const admins = await getGroupAdmins(sock, from);
+
+    if (!admins.includes(sender)) {
+      await sock.sendMessage(from,{
+        text:"❌ Only admins can edit the farewell message."
+      });
+      return;
+    }
+
+    let template = "";
+    let imageBase64 = null;
+
+    const message = msg.message;
+
+    // Detect caption text
+    if (message?.conversation) {
+      template = message.conversation.replace(".salutation edit","").trim();
+    }
+
+    if (message?.extendedTextMessage?.text) {
+      template = message.extendedTextMessage.text.replace(".salutation edit","").trim();
+    }
+
+    if (message?.imageMessage?.caption) {
+      template = message.imageMessage.caption.replace(".salutation edit","").trim();
+    }
+
+    console.log("✏️ Template parsed:", template);
+
+    // Download image if exists
+    if (message?.imageMessage) {
+
+      console.log("🖼 Image detected in salutation edit");
+
+      const stream = await downloadContentFromMessage(
+        message.imageMessage,
+        "image"
+      );
+
+      let buffer = Buffer.from([]);
+
+      for await (const chunk of stream) {
+        buffer = Buffer.concat([buffer, chunk]);
+      }
+
+      console.log("📦 Image buffer size:", buffer.length);
+
+      imageBase64 = buffer.toString("base64");
+
+    }
+
+    // Prompt help if nothing provided
+    if (!template && !imageBase64) {
+
+      await sock.sendMessage(from,{
+text:`✏️ *Salutation Editor*
+
+Use {user} where the member mention should appear.
+
+Example:
+
+👋 Goodbye {user}
+
+We hope you enjoyed your stay.
+You are always welcome back!`
+      });
+
+      return;
+    }
+
+    console.log("📡 Sending request to API...");
+
+    const res = await axios.post(
+      "https://kiroflix.site/backend/update_salutation.php",
+      {
+        group_id: from,
+        admin_id: sender,
+        salutation_text: template || "",
+        image_base64: imageBase64
+      }
+    );
+
+    console.log("📡 API response:", res.data);
+
+    if (!res.data.success) {
+
+      console.error("❌ API error:", res.data);
+
+      await sock.sendMessage(from,{
+        text:"❌ Failed to update farewell message."
+      });
+
+      return;
+    }
+
+    // Update cache
+    goodbyeCache[from] = {
+      text: template || "",
+      image: imageBase64
+    };
+
+    console.log("✅ Salutation cache updated");
+
+    await sock.sendMessage(from,{
+      text:"✅ Farewell message updated."
+    });
+
+  } catch (err) {
+
+    console.error("🚨 Salutation edit error:", err);
+
+    await sock.sendMessage(from,{
+      text:"❌ Error updating farewell message."
+    });
+
+  }
+
+  return;
+}
     if(isGroup && guessAnimeGames[from]){
       
 
@@ -4080,19 +4423,8 @@ nextGuessRound(sock,from);
 
 }
     
-    // update last activity time
-if (isGroup) {
-  try {
-    await handleGroupProtection(sock, msg);
-  } catch(e) {
-    console.error("Anti-spam error:", e);
-  }
-
-  groupActivity[from] = Date.now();
-
-  logMessageStat(from, userId);
-}
-
+   
+const lower = text.trim().toLowerCase();
     // -------------------- COMMAND CHECK BEFORE HANDLER --------------------
 if (isGroup && text.toLowerCase().startsWith("/kiroflix")) {
   // Extract command name after /kiroflix
@@ -4102,7 +4434,6 @@ if (isGroup && text.toLowerCase().startsWith("/kiroflix")) {
   const upcomingCommands = [
     ".mute",
     ".raidlock",
-    ".antisticker",
     ".antiraid",
     ".settings",
     ".reset",
@@ -4337,153 +4668,218 @@ if (isGroup && msg.message?.imageMessage) {
     return; // ✅ STOP MESSAGE FLOW AFTER ERROR
   }
 }
-if (isGroup && text.toLowerCase() === "/kiroflix .leaderboard") {
+if (lower === "/kiroflix .leaderboard") {
 
   const leaderboard = await getLeaderboard(from);
 
   if (!leaderboard.length) {
-
-    await sock.sendMessage(from,{
-      text:"🏆 No scores yet in this group."
-    });
-
+    await sock.sendMessage(from,{ text:"🏆 No scores yet." });
     return;
   }
 
-  let message = "🏆 *Group Leaderboard*\n\n";
+  let msg = "🏆 *GROUP LEADERBOARD*\n\n";
+  const mentions = [];
 
-  leaderboard.forEach((user, index) => {
+  leaderboard.forEach((u,i)=>{
 
-    const username = user.user_id.split("@")[0];
+    const rank = resolveRank(from,i+1,u.score);
 
-    message += `${index + 1}. @${username} — ${user.score} pts\n`;
+    const medal =
+      i===0 ? "🥇" :
+      i===1 ? "🥈" :
+      i===2 ? "🥉" : "🔹";
 
+    const name = `@${u.user_id.split("@")[0]}`;
+
+    mentions.push(u.user_id);
+
+    msg += `${medal} ${i+1}. ${name}
+💎 Points: ${u.score}
+🏅 Rank: ${rank || "Unranked"}
+
+`;
   });
 
   await sock.sendMessage(from,{
-    text: message,
-    mentions: leaderboard.map(u => u.user_id)
+    text:msg,
+    mentions
   });
 
   return;
 }
-// /kiroflix .myrank
-if(text==="/kiroflix .myrank"){
+if (text.startsWith("/kiroflix .rank add")) {
 
-const userId = msg.key.participant || msg.key.remoteJid;
-
-const score = messageStats[from]?.users[userId] || 0;
-
-const rank = await getUserRank(from,userId,score);
-
-const name = userId.split("@")[0];
-
-await sock.sendMessage(from,{
-text:rank
-? `🏅 @${name}\nPoints: ${score}\nRank: *${rank}*`
-: `🏅 @${name}\nPoints: ${score}\nNo rank yet.`,
-mentions:[userId]
-});
-
-}
-
-
-// /kiroflix .ranklist
-if (text.toLowerCase() === "/kiroflix .ranklist") {
-  const ranks = await getRanks(from);
-
-  if (!ranks.length) {
-    await sock.sendMessage(from, { text: "📜 No ranks configured yet." });
-    return;
-  }
-
-  let message = "📜 *Group Ranks*\n\n";
-
-  ranks.forEach(r => {
-    if (r.unique_rank && r.position) {
-      message += `👑 ${r.position}️⃣ ${r.rank_name} (Unique)\n`;
-    } else if (!r.unique_rank && r.min_points) {
-      message += `🪖 ${r.rank_name} — ${r.min_points} pts\n`;
-    }
-  });
-
-  await sock.sendMessage(from, { text: message });
-
-  return;
-}
-
-
-// /kiroflix .rank add
-if(text.toLowerCase().startsWith("/kiroflix .rank add")){
-
-const sender = msg.key.participant || msg.key.remoteJid;
-const admins = await getGroupAdmins(sock,from);
-
-if(!admins.includes(sender)){
- await sock.sendMessage(from,{text:"❌ Admin only"});
- return;
-}
-
-const cmd = text.replace("/kiroflix .rank add","").trim();
-
-const match = cmd.match(/"([^"]+)"|(\S+)/);
-
-if(!match){
- await sock.sendMessage(from,{text:"❌ Rank name required"});
- return;
-}
-
-const rankName = match[1] || match[2];
-
-const args = cmd.replace(match[0],"").trim().split(" ");
-
-let options = {};
-
-for(let i=0;i<args.length;i++){
-
- if(args[i]==="points"){
-   options.minPoints = parseInt(args[i+1]);
- }
-
- if(args[i]==="position"){
-   options.position = parseInt(args[i+1]);
-   options.uniqueRank = true;
- }
-
-}
-
-const res = await addRank(from,rankName,options);
-
-await sock.sendMessage(from,{
- text:res.success
- ? `✅ Rank added: ${rankName}`
- : `❌ ${res.error}`
-});
-
-}
-
-// /kiroflix .rank delete
-if (text.toLowerCase().startsWith("/kiroflix .rank delete")) {
   const sender = msg.key.participant || msg.key.remoteJid;
   const admins = await getGroupAdmins(sock, from);
 
   if (!admins.includes(sender)) {
-    await sock.sendMessage(from, {
-      text: "❌ Only admins can delete ranks.",
-      mentions: [sender]
+    await sock.sendMessage(from,{ text:"❌ Only admins can add ranks." });
+    return;
+  }
+
+  const match = text.match(/{{(.+?)}}\s+(position|points)\s+(\d+)/i);
+
+  if (!match) {
+    await sock.sendMessage(from,{
+      text:"❌ Invalid format.\n/kiroflix .rank add {{Rank Name}} <position|points> <value>"
     });
     return;
   }
 
-  const rankName = text.split(" ").slice(4).join(" ");
+  const name = match[1].trim();
+  const type = match[2].toLowerCase();
+  const value = parseInt(match[3]);
 
-  const result = await deleteRank(from, rankName);
+  const res = await axios.post(
+    "https://kiroflix.site/backend/add_rank.php",
+    {
+      group_id: from,
+      rank_name: name,
+      rank_type: type === "position" ? "position" : "points",
+      position: type === "position" ? value : null,
+      min_points: type === "points" ? value : null
+    }
+  );
 
-  await sock.sendMessage(from, {
-    text: result.success
-      ? `✅ Rank ${rankName} deleted.`
-      : `❌ Failed: ${result.error}`
+  if (res.data.success) {
+
+    if (!rankCache[from]) rankCache[from] = [];
+
+    rankCache[from].push({
+      group_id: from,
+      rank_name: name,
+      rank_type: type === "position" ? "position" : "points",
+      position: type === "position" ? value : null,
+      min_points: type === "points" ? value : null
+    });
+
+    await sock.sendMessage(from,{ text:`✅ Rank added: ${name}` });
+
+  } else {
+
+    await sock.sendMessage(from,{
+      text:`❌ Failed to add rank: ${res.data.error || "Unknown error"}`
+    });
+
+  }
+
+  return;
+}
+if (text.startsWith("/kiroflix .rank delete")) {
+
+  const match = text.match(/{{(.+?)}}/);
+
+  if (!match) {
+    await sock.sendMessage(from,{
+      text:"❌ Invalid format.\n/kiroflix .rank delete {{Rank Name}}"
+    });
+    return;
+  }
+
+  const name = match[1].trim();
+
+  const res = await axios.post(
+    "https://kiroflix.site/backend/delete_rank.php",
+    {
+      group_id: from,
+      rank_name: name
+    }
+  );
+
+  if (res.data.success) {
+
+    if (rankCache[from]) {
+      rankCache[from] = rankCache[from].filter(r => r.rank_name !== name);
+    }
+
+    await sock.sendMessage(from,{ text:`❌ Rank deleted: ${name}` });
+
+  } else {
+
+    await sock.sendMessage(from,{
+      text:`❌ Failed to delete rank: ${res.data.error || "Unknown error"}`
+    });
+
+  }
+
+  return;
+}
+if (text === "/kiroflix .ranklist") {
+
+  const ranks = rankCache[from] || [];
+
+  if (!ranks.length) {
+    await sock.sendMessage(from,{ text:"📜 No ranks configured." });
+    return;
+  }
+
+  let msg = "📜 *Group Ranks*\n\n";
+
+  ranks.forEach(r => {
+
+    if (r.rank_type === "position")
+      msg += `🥇 Position ${r.position} → ${r.rank_name}\n`;
+
+    if (r.rank_type === "points")
+      msg += `💎 ${r.min_points}+ points → ${r.rank_name}\n`;
+
   });
+
+  await sock.sendMessage(from,{ text:msg });
+
+  return;
+}
+if (text.toLowerCase() === "/kiroflix .myrank") {
+
+  const user = msg.key.participant || msg.key.remoteJid;
+
+  const data = await getUserRank(from,user);
+
+  if (!data) {
+    await sock.sendMessage(from,{
+      text:"❌ Failed to fetch your rank."
+    },{quoted:msg});
+    return;
+  }
+
+  const position = data.position || "Unranked";
+  const points = data.points || 0;
+
+  const rankName = resolveRank(from,position,points);
+  const nextRank = getNextRank(from,points);
+
+  let progress="";
+
+  if(nextRank){
+
+    const need = nextRank.min_points - points;
+
+    progress=`📈 Next Rank: ${nextRank.rank_name}
+Need: ${need} points`;
+
+  } else {
+
+    progress="🏆 You reached the highest rank!";
+
+  }
+
+  const username = user.split("@")[0];
+
+  const message = `🏅 *Your Rank*
+
+👤 User: @${username}
+
+🏆 Position: ${position}
+💎 Points: ${points}
+
+🎖 Rank: ${rankName || "Unranked"}
+
+${progress}`;
+
+  await sock.sendMessage(from,{
+    text:message,
+    mentions:[user]
+  },{quoted:msg});
 
   return;
 }
@@ -4580,7 +4976,11 @@ if (isGroup && text.toLowerCase().startsWith(".kick ")) {
       await sock.groupParticipantsUpdate(from, [userId], "remove");
 
       // Find participant name if available, otherwise fallback to ID
-      const userName = metadata.participants?.find(p => p.id === userId)?.name || userId.split("@")[0];
+      const metadata = await sock.groupMetadata(from);
+
+const userName =
+metadata.participants?.find(p => p.id === userId)?.name ||
+userId.split("@")[0];
 
       // ✅ Success message
       await sock.sendMessage(from, { text: `🚫 ${userName} has been kicked from the group.` });
@@ -4702,56 +5102,7 @@ text:`🚫 Bad Words List\n\n${words.join("\n")}`
 return;
 
 }
-      if (isGroup && text.startsWith(".salutation edit")) {
-
-  const sender = msg.key.participant || msg.key.remoteJid;
-  const admins = await getGroupAdmins(sock, from);
-
-  if (!admins.includes(sender)) {
-    await sock.sendMessage(from,{
-      text:"❌ Only admins can edit the farewell message."
-    });
-    return;
-  }
-
-  const template = text.replace(".salutation edit","").trim();
-
-  if (!template) {
-
-    await sock.sendMessage(from,{
-      text:
-`✏️ Salutation Editor
-
-Use {user} where the member mention should appear.
-
-Example:
-
-👋 Goodbye {user}
-
-We hope you enjoyed your stay.
-You are always welcome back!`
-    });
-
-    return;
-  }
-
-  await axios.post(
-    "https://kiroflix.site/backend/update_salutation.php",
-    {
-      group_id: from,
-      admin_id: sender,
-      salutation_text: template
-    }
-  );
-
-  goodbyeCache[from] = template;
-
-  await sock.sendMessage(from,{
-    text:"✅ Farewell message updated."
-  });
-
-  return;
-}
+      
       if (isGroup && text.toLowerCase() === ".stats") {
 
   const stats = messageStats[from];
