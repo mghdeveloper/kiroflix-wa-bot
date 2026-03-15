@@ -65,60 +65,410 @@ const GEMINI_URL =
 // -------------------- GROUP ADMIN COMMANDS --------------------
 // -------------------- TOGGLED COMMANDS (on/off) --------------------
 const toggledCommands = {
-  bot: "🤖 Enable/disable the bot in this group (.bot on/off)",
-  ai: "🧠 Enable/disable AI replies (.ai on/off)",
-  anime: "🎬 Enable/disable anime requests (.anime on/off)",
-  lasteps: "📢 Auto notify when new anime episodes release (.lasteps on/off)",
-  animerec: "⭐ Daily anime recommendation (.animerec on/off)",
-  manhwa: "📚 Enable/disable manhwa reader (.manhwa on/off)",
-  manhwadaily: "📖 Daily random manhwa chapter (.manhwadaily on/off)",
-  manhwarelease: "🚀 Notify when new manhwa chapter releases (.manhwarelease on/off)",
-  wallpaper: "🖼 Enable wallpaper search (.wallpaper on/off)",
-  wallpaperdaily: "🌅 Daily anime wallpaper (.wallpaperdaily on/off)",
-  games: "🎮 Enable group games (.games on/off)",
-  waifu: "💖 Waifu claim system (.waifu on/off)",
-  antispam: "🚫 Anti spam protection (.antispam on/off)",
-  antiflood: "⚡ Anti flood protection (.antiflood on/off)",
-  antilinks: "🔗 Block links (.antilinks on/off)",
-  antiraid: "🛡 Anti raid protection (.antiraid on/off)",
-  antibadwords: "🚫 Block messages containing banned words (.antibadwords on/off)",
-  antimention: "📢 Block mention spam (.antimention on/off)",
-  antisticker: "🧩 Prevent sticker spam (.antisticker on/off)",
-  raidlock: "🔒 Auto lock group during raid (.raidlock on/off)",
-  welcome: "👋 Welcome message (.welcome on/off)",
-  mute: "🔇 Mute the bot (.mute on/off)",
-  slowmode: "🐢 Enable slowmode (.slowmode 10s)",
-  stickers: "🖌 Enable sticker maker (.stickers on/off)",
-  salutation: "📩 Send farewell message when member leaves (.salutation on/off)",
-  adminlog: "📢 Notify group owner when admins add/promote/demote users (.adminlog on/off)"
-};
 
-// -------------------- NON-TOGGLED COMMANDS --------------------
+bot:{
+category:"CORE",
+description:"Enable or disable the bot in this group.",
+usage:".bot on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+ai:{
+category:"AI",
+description:"Enable AI assistant replies in the group.",
+usage:".ai on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+anime:{
+category:"OTAKU",
+description:"Allow members to request anime information and streams.",
+usage:".anime on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+lasteps:{
+category:"OTAKU",
+description:"Automatically notify the group when new anime episodes release.",
+usage:".lasteps on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+animerec:{
+category:"OTAKU",
+description:"Send a daily anime recommendation to the group.",
+usage:".animerec on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+manhwa:{
+category:"OTAKU",
+description:"Enable the manhwa reader commands.",
+usage:".manhwa on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+manhwadaily:{
+category:"OTAKU",
+description:"Send a random manhwa chapter every day.",
+usage:".manhwadaily on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+manhwarelease:{
+category:"OTAKU",
+description:"Notify when a new manhwa chapter releases.",
+usage:".manhwarelease on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+wallpaper:{
+category:"MEDIA",
+description:"Allow members to search anime wallpapers.",
+usage:".wallpaper on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+wallpaperdaily:{
+category:"MEDIA",
+description:"Send a daily anime wallpaper automatically.",
+usage:".wallpaperdaily on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+games:{
+category:"FUN",
+description:"Enable group games and challenges.",
+usage:".games on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+waifu:{
+category:"FUN",
+description:"Enable the waifu claim system for members.",
+usage:".waifu on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+antispam:{
+category:"PROTECTION",
+description:"Detect and delete spam messages automatically.",
+usage:".antispam on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+antiflood:{
+category:"PROTECTION",
+description:"Prevent users from sending too many messages quickly.",
+usage:".antiflood on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+antilinks:{
+category:"PROTECTION",
+description:"Block links sent by members.",
+usage:".antilinks on/off",
+adminOnly:true,
+adminPromote:true
+},
+
+antiraid:{
+category:"PROTECTION",
+description:"Detect mass joins and prevent raid attacks.",
+usage:".antiraid on/off",
+adminOnly:true,
+adminPromote:true
+},
+
+antibadwords:{
+category:"PROTECTION",
+description:"Delete messages containing banned words.",
+usage:".antibadwords on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+antimention:{
+category:"PROTECTION",
+description:"Block messages mentioning too many members.",
+usage:".antimention on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+antisticker:{
+category:"PROTECTION",
+description:"Prevent sticker spam.",
+usage:".antisticker on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+raidlock:{
+category:"PROTECTION",
+description:"Lock the group automatically during raid attacks.",
+usage:".raidlock on/off",
+adminOnly:true,
+adminPromote:true
+},
+
+welcome:{
+category:"GROUP",
+description:"Send welcome message when members join.",
+usage:".welcome on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+mute:{
+category:"CORE",
+description:"Mute the bot so it ignores commands.",
+usage:".mute on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+slowmode:{
+category:"GROUP",
+description:"Add delay between messages to reduce spam.",
+usage:".slowmode 10s",
+adminOnly:true,
+adminPromote:false
+},
+
+stickers:{
+category:"MEDIA",
+description:"Enable sticker creation commands.",
+usage:".stickers on/off",
+adminOnly:false,
+adminPromote:false
+},
+
+salutation:{
+category:"GROUP",
+description:"Send farewell message when a member leaves.",
+usage:".salutation on/off",
+adminOnly:true,
+adminPromote:false
+},
+
+adminlog:{
+category:"ADMIN",
+description:"Notify group owner when admins perform actions.",
+usage:".adminlog on/off",
+adminOnly:true,
+adminPromote:false
+}
+
+};
 const nonToggledCommands = {
-  guessanime: "🎯 Anime guessing game (.guessanime start)",
-  quiz: "🧠 Anime quiz (.quiz start / .quiz stop)",
-  kick: "👢 Kick mentioned user (.kick @user)",
-  ban: "⛔ Ban user from bot (.ban @user)",
-  leaderboard: "🏆 Show group leaderboard (.leaderboard)",
-  myrank: "🏅 Show your rank (.myrank)",
-  ranklist: "📜 Show all ranks (.ranklist)",
-  rankadd: '➕ Add rank (.rank add {{Rank Name}} points 100 / position 1)',
-  rankdelete: "❌ Delete rank (.rank delete {{Rank Name}})",
-  stats: "📊 Show group usage stats (.stats)",
-  active: "🔥 Show most active users (.active)",
-  settings: "⚙ Show group settings (.settings)",
-  reset: "♻ Reset group configuration (.reset)",
-  menu: "📋 Show admin menu (.menu)",
-  watchparty: "🍿 Start group watch party (.watchparty start)",
-  waifu: "💖 Claim an anime character (.waifu <character>)",
-  badwordadd: "🚫 Add bad words (.badword add word1,word2)",
-  badwordremove: "❌ Remove bad words (.badword remove word1,word2)",
-  badwordlist: "📋 Show bad words list (.badword list)",
-  welcomeedit: "📝 Edit welcome message (.welcome edit <text>)",
-  salutationedit: "✏️ Edit farewell message (.salutation edit <text>)",
-  stickers: "🖌 Convert image to sticker (/kiroflix .stickers on image)"
-};
+  ask:{
+category:"AI",
+description:"Ask the AI anything directly. The bot will automatically understand your question.",
+usage:"Just send a normal message like: 'Explain Naruto story' or 'Who is stonger gojo or Sokuna?'",
+adminOnly:false,
+adminPromote:false
+},
 
+animewatch:{
+category:"OTAKU",
+description:"Get anime episode streaming (EN sub, no ads) by sending the anime title with season and episode.",
+usage:"Example: Naruto Shippuden S2 E15",
+adminOnly:false,
+adminPromote:false
+},
+
+manhwaread:{
+category:"OTAKU",
+description:"Read a manhwa or manga chapter as a PDF by sending the title and chapter number.",
+usage:"Example: Solo Leveling Chapter 120",
+adminOnly:false,
+adminPromote:false
+},
+
+guessanime:{
+category:"FUN",
+description:"Start an anime guessing game.",
+usage:".guessanime start",
+adminOnly:false,
+adminPromote:false
+},
+
+quiz:{
+category:"FUN",
+description:"Start an anime quiz challenge.",
+usage:".quiz start / .quiz stop",
+adminOnly:false,
+adminPromote:false
+},
+
+kick:{
+category:"ADMIN",
+description:"Remove a user from the group.",
+usage:".kick @user",
+adminOnly:true,
+adminPromote:true
+},
+
+ban:{
+category:"ADMIN",
+description:"Ban a user from using the bot.",
+usage:".ban @user",
+adminOnly:true,
+adminPromote:false
+},
+
+leaderboard:{
+category:"FUN",
+description:"Display the group leaderboard.",
+usage:".leaderboard",
+adminOnly:false,
+adminPromote:false
+},
+
+myrank:{
+category:"FUN",
+description:"Display your current rank in the group.",
+usage:".myrank",
+adminOnly:false,
+adminPromote:false
+},
+
+ranklist:{
+category:"FUN",
+description:"Show all available ranks.",
+usage:".ranklist",
+adminOnly:false,
+adminPromote:false
+},
+
+rankadd:{
+category:"ADMIN",
+description:"Create a new rank for the group.",
+usage:".rank add {Rank Name} points 100",
+adminOnly:true,
+adminPromote:false
+},
+
+rankdelete:{
+category:"ADMIN",
+description:"Delete an existing rank.",
+usage:".rank delete {Rank Name}",
+adminOnly:true,
+adminPromote:false
+},
+
+stats:{
+category:"STATS",
+description:"Display group usage statistics.",
+usage:".stats",
+adminOnly:false,
+adminPromote:false
+},
+
+active:{
+category:"STATS",
+description:"Show most active group members.",
+usage:".active",
+adminOnly:false,
+adminPromote:false
+},
+
+settings:{
+category:"CORE",
+description:"Display current group bot settings.",
+usage:".settings",
+adminOnly:true,
+adminPromote:false
+},
+
+reset:{
+category:"CORE",
+description:"Reset all bot settings for this group.",
+usage:".reset",
+adminOnly:true,
+adminPromote:false
+},
+
+menu:{
+category:"CORE",
+description:"Show the full command menu.",
+usage:".menu",
+adminOnly:true,
+adminPromote:false
+},
+
+watchparty:{
+category:"FUN",
+description:"Start a group watch party session.",
+usage:".watchparty start",
+adminOnly:false,
+adminPromote:false
+},
+
+badwordadd:{
+category:"PROTECTION",
+description:"Add banned words to filter.",
+usage:".badword add word1,word2",
+adminOnly:true,
+adminPromote:false
+},
+
+badwordremove:{
+category:"PROTECTION",
+description:"Remove banned words.",
+usage:".badword remove word1,word2",
+adminOnly:true,
+adminPromote:false
+},
+
+badwordlist:{
+category:"PROTECTION",
+description:"Display banned words list.",
+usage:".badword list",
+adminOnly:true,
+adminPromote:false
+},
+
+welcomeedit:{
+category:"GROUP",
+description:"Edit the welcome message.",
+usage:".welcome edit <text>",
+adminOnly:true,
+adminPromote:false
+},
+
+salutationedit:{
+category:"GROUP",
+description:"Edit the farewell message.",
+usage:".salutation edit <text>",
+adminOnly:true,
+adminPromote:false
+},
+
+stickers:{
+category:"MEDIA",
+description:"Convert image to sticker.",
+usage:"reply image → /kiroflix .stickers",
+adminOnly:false,
+adminPromote:false
+}
+
+};
 // -------------------- LOCAL CACHE --------------------
 let groupCommandsCache = {}; 
 function randomDelay(min = 0, max = 5000) {
@@ -391,21 +741,27 @@ ${context || "No prior context available."}
 IMPORTANT LANGUAGE RULE:
 - Detect the language of the user's message.
 - ALWAYS reply in the SAME language as the user.
-- If user writes in French → reply in French.
-- If user writes in Arabic → reply in Arabic.
-- If user writes in English → reply in English.
-- Never translate the user's message, only reply in the same language.
+- French → reply in French.
+- Arabic → reply in Arabic.
+- English → reply in English.
+
+COMMAND RULE (VERY IMPORTANT):
+- You CANNOT execute bot commands.
+- If a user sends something that looks like a bot command (example: .antilinks, .kick, .ban, .on, .off, etc), DO NOT confirm it.
+- Instead reply with:
+"🤖 I'm only an AI assistant. Please ensure you use the correct command format: /kiroflix .antilinks on"
 
 BEHAVIOR RULES:
 - Reply naturally like a human.
 - 1–3 short sentences (up to 10 if explaining anime details).
 - Use a few emojis.
-- If the user asks for suggestions or shows interest, recommend 1–3 anime or episodes.
-- Mention available features when relevant:
+- If the user asks for suggestions, recommend 1–3 anime.
+- Mention features when relevant:
   • Watch anime episodes
   • Generate subtitles
-  • Read manhwa chapters only in english and manga not supported
-- Avoid repeating generic replies.
+  • Read manhwa chapters (English only)
+  • Manga is NOT supported
+- Never pretend to enable/disable bot features.
 
 User message:
 "${userText}"
@@ -1470,8 +1826,9 @@ async function checkNewChapters(sock) {
     const fullMessage = messageLines.join("\n\n");
 
     const lastPosterChapter = [...newChapters].reverse().find(ch => ch.poster?.large);
-    const lastPoster = lastPosterChapter?.poster?.large || null;
-
+const lastPoster = lastPosterChapter?.poster?.large
+  ? "https://kiroflix.site/backend/mangaposterproxy.php?url=" + lastPosterChapter.poster.large
+  : null;
     console.log(`ℹ️ Sending chapters to ${eligibleGroups.length} groups`);
 
     // 6️⃣ Send with throttling
@@ -1873,7 +2230,7 @@ async function downloadImageWithProxy(url) {
     try {
 
       const proxyUrl =
-        "https://kirotools.onrender.com/proxy?url=" +
+        "https://kiroflix.site/backend/mangaposterproxy.php?url=" +
         encodeURIComponent(url);
 
       const res = await axios.get(proxyUrl, {
@@ -2373,6 +2730,35 @@ Return JSON only:
   // next question
   game.timer = setTimeout(()=>{ askNextQuestion(sock, groupId); }, 4000);
 }
+async function checkRankUpdate(sock, groupId, userId, oldPoints, newPoints, oldPosition, newPosition){
+
+  const oldRank = resolveRank(groupId, oldPosition, oldPoints);
+  const newRank = resolveRank(groupId, newPosition, newPoints);
+
+  if (!newRank) return;
+
+  // Only trigger if rank changed
+  if (oldRank !== newRank) {
+
+    const username = userId.split("@")[0];
+
+    const msg =
+`🎉 *RANK UP!*
+
+👤 @${username}
+
+🏅 New Rank: *${newRank}*
+
+🔥 Keep chatting and climbing the leaderboard!`;
+
+    await sock.sendMessage(groupId,{
+      text: msg,
+      mentions:[userId]
+    });
+
+  }
+}
+
 async function endGame(sock, groupId){
 
   const game = activeGames[groupId];
@@ -2403,7 +2789,31 @@ async function endGame(sock, groupId){
   });
 
   // ⭐ SAVE FINAL SCORES
-  await saveScores(groupId, game.scores);
+  // ⭐ SAVE FINAL SCORES
+for (const [userId, score] of Object.entries(game.scores)) {
+
+  const oldData = await getUserRank(groupId, userId);
+
+  await saveScores(groupId, { [userId]: score });
+
+  const newData = await getUserRank(groupId, userId);
+
+  if (oldData && newData) {
+
+    await checkRankUpdate(
+      sock,
+      groupId,
+      userId,
+      oldData.points,
+      newData.points,
+      oldData.position,
+      newData.position
+    );
+
+  }
+
+}
+
 
   delete activeGames[groupId];
 }
@@ -2701,8 +3111,7 @@ const protectionCache = {
 };
 const linkWarnings = {};
 const linkRegex =
-/(https?:\/\/|www\.|chat\.whatsapp\.com\/|wa\.me\/|t\.me\/|discord\.gg\/|discord\.com\/invite\/|bit\.ly\/|tinyurl\.com\/|goo\.gl\/|instagram\.com\/|tiktok\.com\/|youtube\.com\/|youtu\.be\/)/i;
-
+/\b((https?:\/\/|ftp:\/\/)?(www\.)?[a-zA-Z0-9-]+\.(com|net|org|io|gg|co|me|app|dev|xyz|info|biz|online|site|store|tech|ai|link|ly|gl|tv|gg|ru|cn|jp|uk|us|ca|de|fr|it|es|nl|in|br|au|za|sa|ae|ir|pk|bd|tr|id|kr|vn)([\/?#][^\s]*)?)/i;
 const disguisedRegex =
 /(hxxp:\/\/|hxxps:\/\/|http\s?:\/\/|https\s?:\/\/)/i;
 
@@ -3237,46 +3646,114 @@ console.log("Protection error:",err.message);
 }
 async function sendGroupMenu(sock, from, sender) {
   try {
+
     const metadata = await sock.groupMetadata(from);
 
     const adminIds = metadata.participants
       .filter(p => p.admin === "admin" || p.admin === "superadmin")
       .map(p => p.id);
 
+    // Only admins can see menu
     if (!adminIds.includes(sender)) return;
 
-    // Define defaultOff for menu display
     const defaultOff = [
-      "games", "waifu", "antispam", "antiflood", "antilinks",
-      "antiraid", "antimention", "antisticker", "raidlock",
-      "welcome", "mute", "slowmode", "stickers", "salutation","antibadwords","adminlog"
+      "games","waifu","antispam","antiflood","antilinks",
+      "antiraid","antimention","antisticker","raidlock",
+      "welcome","mute","slowmode","stickers","salutation",
+      "antibadwords","adminlog"
     ];
 
-    const toggledText = Object.entries(toggledCommands)
-      .map(([cmd, desc]) => {
-        // use cache if exists, else defaultOff → off, else on
+    // helper to group by category
+    const groupByCategory = (commands) => {
+      const categories = {};
+      for (const [name, data] of Object.entries(commands)) {
+        const cat = data.category || "OTHER";
+        if (!categories[cat]) categories[cat] = [];
+        categories[cat].push([name, data]);
+      }
+      return categories;
+    };
+
+    const toggledCategories = groupByCategory(toggledCommands);
+    const normalCategories = groupByCategory(nonToggledCommands);
+
+    let menuText =
+`📋 *✨ Kiroflix Group Menu ✨*
+
+👑 Admin Only
+⚡ Bot Must Be Admin
+
+────────────────────
+`;
+
+    // ---------------- TOGGLED ----------------
+    menuText += `\n🎛️ *Toggled Features*\n`;
+
+    for (const category in toggledCategories) {
+
+      menuText += `\n📂 *${category}*\n`;
+
+      for (const [cmd, data] of toggledCategories[category]) {
+
         let status = groupCommandsCache[from]?.[cmd];
         if (!status) status = defaultOff.includes(cmd) ? "off" : "on";
-        return `• *.${cmd}* → ${desc}  [*${status.toUpperCase()}*]`;
-      })
-      .join("\n");
 
-    const nonToggledText = Object.entries(nonToggledCommands)
-      .map(([cmd, desc]) => `• *.${cmd}* → ${desc}`)
-      .join("\n");
+        const statusStyled =
+          status.toUpperCase() === "ON"
+            ? "✅ ON"
+            : "❌ OFF";
 
-    const menuText =
-`📋 *Kiroflix Group Commands Menu*
+        let flags = "";
+        if (data.adminOnly) flags += " 👑";
+        if (data.adminPromote) flags += " ⚡";
 
-🎛️ *Toggled Commands* (on/off):
-${toggledText}
+        menuText +=
+`✦ *.${cmd}*${flags}
 
-📝 *Other Commands*:
-${nonToggledText}
+${data.description}
 
-💡 *Example:*
+Usage:
+${data.usage}
+
+Status: ${statusStyled}
+
+`;
+      }
+    }
+
+    // ---------------- NORMAL COMMANDS ----------------
+    menuText += `\n🧰 *Commands*\n`;
+
+    for (const category in normalCategories) {
+
+      menuText += `\n📂 *${category}*\n`;
+
+      for (const [cmd, data] of normalCategories[category]) {
+
+        let flags = "";
+        if (data.adminOnly) flags += " 👑";
+        if (data.adminPromote) flags += " ⚡";
+
+        menuText +=
+`✦ *.${cmd}*${flags}
+
+${data.description}
+
+Usage:
+${data.usage}
+
+`;
+      }
+    }
+
+    menuText +=
+`\n────────────────────
+💡 *Examples*
+
+/kiroflix .anime Naruto
 /kiroflix .games on
-/kiroflix .anime off`;
+/kiroflix .antiraid on
+`;
 
     await sock.sendMessage(from, { text: menuText });
 
@@ -3284,6 +3761,7 @@ ${nonToggledText}
     console.error("❌ Failed to send group menu:", err.message);
   }
 }
+
 //
 // -------------------- GROUP TOGGLE HANDLER --------------------
 //
@@ -3555,65 +4033,43 @@ async function imageToWebp(buffer, outputPath) {
   console.log("✅ Sticker saved:", outputPath);
 }
 // 📊 Message stats cache
+// 📊 Message stats cache
 const messageStats = {};
 const messageFloodGuard = {};
-function logMessageStat(groupId, userId) {
 
+// Log a single message
+function logMessageStat(groupId, userId) {
   const now = Date.now();
 
-  // Flood guard
-  if (!messageFloodGuard[userId]) {
-    messageFloodGuard[userId] = [];
-  }
-
-  // remove old timestamps (5s window)
-  messageFloodGuard[userId] =
-    messageFloodGuard[userId].filter(t => now - t < 5000);
-
-  // if too many messages in short time → ignore
-  if (messageFloodGuard[userId].length >= 4) {
-    return;
-  }
-
+  // Flood guard: max 4 messages per 5s
+  if (!messageFloodGuard[userId]) messageFloodGuard[userId] = [];
+  messageFloodGuard[userId] = messageFloodGuard[userId].filter(t => now - t < 5000);
+  if (messageFloodGuard[userId].length >= 4) return;
   messageFloodGuard[userId].push(now);
 
-  if (!messageStats[groupId]) {
-    messageStats[groupId] = {
-      total: 0,
-      users: {}
-    };
-  }
+  // Initialize group
+  if (!messageStats[groupId]) messageStats[groupId] = { total: 0, users: {} };
 
   messageStats[groupId].total++;
-
-  if (!messageStats[groupId].users[userId]) {
-    messageStats[groupId].users[userId] = 0;
-  }
-
-  messageStats[groupId].users[userId]++;
+  messageStats[groupId].users[userId] = (messageStats[groupId].users[userId] || 0) + 1;
 }
+
+// Push only **new stats** to backend
 async function pushStatsToBackend() {
-
   try {
-
     const payload = [];
 
     for (const groupId in messageStats) {
-
       for (const userId in messageStats[groupId].users) {
-
-        payload.push({
-          group_id: groupId,
-          user_id: userId,
-          messages: messageStats[groupId].users[userId]
-        });
-
+        const count = messageStats[groupId].users[userId];
+        if (count <= 0) continue; // skip zero
+        payload.push({ group_id: groupId, user_id: userId, messages: count });
       }
-
     }
 
-    if (!payload.length || payload.length > 5000) return;
+    if (!payload.length) return;
 
+    // Send to backend
     await axios.post(
       "https://kiroflix.site/backend/save_message_stats.php",
       { stats: payload }
@@ -3621,18 +4077,16 @@ async function pushStatsToBackend() {
 
     console.log(`📊 Pushed ${payload.length} stats to backend`);
 
-    // reset cache after sending
+    // Reset local counters after sending
     for (const groupId in messageStats) {
-  messageStats[groupId] = {
-    total: 0,
-    users: {}
-  };
-}
+      for (const userId in messageStats[groupId].users) {
+        messageStats[groupId].users[userId] = 0;
+      }
+      messageStats[groupId].total = 0;
+    }
 
   } catch (err) {
-
     console.error("❌ Failed to push message stats:", err.message);
-
   }
 }
 async function fetchMessageStats() {
@@ -3836,36 +4290,63 @@ function resolveRank(groupId, position, points) {
 
   return best ? best.rank_name : null;
 }
-async function getUserRank(groupId,userId){
+async function getUserRank(groupId, userId){
 
 try{
+
+const payload = {
+group_id: groupId,
+user_id: userId
+};
+
+console.log("📡 Rank API Request:");
+console.log(payload);
 
 const res = await fetch(
 "https://kiroflix.site/backend/get_user_rank.php",
 {
 method:"POST",
 headers:{"Content-Type":"application/json"},
-body:JSON.stringify({
-group_id:groupId,
-user_id:userId
-})
+body:JSON.stringify(payload)
 });
 
-const data = await res.json();
+const text = await res.text();
 
-if(!data.success) return null;
+console.log("📥 Rank API Raw Response:");
+console.log(text);
+
+let data;
+
+try{
+data = JSON.parse(text);
+}catch{
+
+console.error("❌ Invalid JSON from Rank API");
+return null;
+
+}
+
+if(!data.success){
+
+console.error("❌ Rank API returned failure:", data);
+return null;
+
+}
+
+console.log("✅ Rank API parsed response:", data);
 
 return data;
 
 }catch(err){
 
-console.log("Rank fetch error:",err);
+console.error("❌ Rank fetch error:", err);
 
 return null;
 
 }
 
 }
+
 function getNextRank(groupId,points){
 
 const ranks = rankCache[groupId] || [];
