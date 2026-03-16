@@ -4759,6 +4759,55 @@ async function getUserProfile(groupId,userId){
     return null;
   }
 }
+const crypto = require("crypto");
+
+function secureRandom(min, max) {
+  const range = max - min + 1;
+  const bytes = crypto.randomBytes(4).readUInt32BE(0);
+  return min + (bytes % range);
+}
+function runDailyRandom(task) {
+
+  function scheduleNext() {
+
+    const hour = secureRandom(0, 23);
+    const minute = secureRandom(0, 59);
+    const second = secureRandom(0, 59);
+
+    const now = new Date();
+
+    const next = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      hour,
+      minute,
+      second
+    ));
+
+    if (next <= now) {
+      next.setUTCDate(next.getUTCDate() + 1);
+    }
+
+    const delay = next - now;
+
+    console.log(`⏰ Task scheduled at UTC ${hour}:${minute}:${second}`);
+
+    setTimeout(async () => {
+      try {
+        await task();
+      } catch (err) {
+        console.error("Daily task error:", err);
+      }
+
+      scheduleNext(); // schedule next day
+    }, delay);
+
+  }
+
+  scheduleNext();
+
+}
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
@@ -4788,29 +4837,28 @@ async function startBot() {
       await fetchRanks();
       checkNewEpisodes(sock);
       checkNewChapters(sock);
-      await sendDailyAnimeRecommendations(sock);
-      await sendDailyManhwaRecommendation(sock);
-      await sendDailyWallpapers(sock);
       if (!schedulerStarted) {
 
   schedulerStarted = true;
+
   await fetchGroupBadWords();
-      setInterval(()=>{
-  saveDB(protectionDB);
-},20000);
-setInterval(syncLogsBatch, 1 * 60 * 1000);
+
+  setInterval(()=> {
+    saveDB(protectionDB);
+  },20000);
+
+  setInterval(syncLogsBatch, 1 * 60 * 1000);
 
   // random hourly
   runHourlyRandom(() => checkNewEpisodes(sock));
   runHourlyRandom(() => checkNewChapters(sock));
 
-  // random daily
+  // random daily (ONE TIME PER DAY)
   runDailyRandom(() => sendDailyAnimeRecommendations(sock));
   runDailyRandom(() => sendDailyManhwaRecommendation(sock));
   runDailyRandom(() => sendDailyWallpapers(sock));
 
 }
-
 
 
 
