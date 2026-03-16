@@ -5613,7 +5613,8 @@ if (text.startsWith("/kiroflix .rank add")) {
       rank_name: name,
       rank_type: type === "position" ? "position" : "points",
       position: type === "position" ? value : null,
-      min_points: type === "points" ? value : null
+      min_points: type === "points" ? value : null,
+      creator_id: sender
     }
   );
 
@@ -5626,7 +5627,8 @@ if (text.startsWith("/kiroflix .rank add")) {
       rank_name: name,
       rank_type: type === "position" ? "position" : "points",
       position: type === "position" ? value : null,
-      min_points: type === "points" ? value : null
+      min_points: type === "points" ? value : null,
+      creator_id: sender
     });
 
     await sock.sendMessage(from,{ text:`✅ Rank added: ${name}` });
