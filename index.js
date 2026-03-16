@@ -5,7 +5,8 @@ const {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   DisconnectReason,
-  downloadContentFromMessage   // <-- add this line
+  downloadContentFromMessage ,  // <-- add this line
+  downloadMediaMessage
 } = require("@whiskeysockets/baileys");
 
 const axios = require("axios");
@@ -225,7 +226,13 @@ usage:".raidlock on/off",
 adminOnly:true,
 adminPromote:true
 },
-
+antisexual:{
+category:"PROTECTION",
+description:"Automatically detect and remove sexual or explicit images using AI moderation. The bot will delete the image and remove the sender if such content is detected. Limited to 50 images scanned per day per group.",
+usage:".antisexual on/off",
+adminOnly:true,
+adminPromote:false
+},
 welcome:{
 category:"GROUP",
 description:"Send welcome message when members join.",
@@ -340,10 +347,10 @@ adminOnly:false,
 adminPromote:false
 },
 
-myrank:{
+profile:{
 category:"FUN",
-description:"Display your current rank in the group.",
-usage:".myrank",
+description:"Display your profile card with rank, points, waifu, and message stats. You can also view another member's profile.",
+usage:".profile or .profile @user",
 adminOnly:false,
 adminPromote:false
 },
@@ -2135,7 +2142,7 @@ ${a.synopsis}`
     // ✅ NORMAL RUN → SEND TO GROUPS WITH animerec ON
 
     const groups = Object.keys(groupCommandsCache).filter(
-      gid => groupCommandsCache[gid]?.animerec === "on"
+      gid => groupCommandsCache[gid]?.animerec === "on" && groupCommandsCache[gid]?.bot !== "off"
     );
 
     console.log(`📢 Sending recommendations to ${groups.length} groups`);
@@ -2307,7 +2314,7 @@ ${manhwa.synopsis}`;
 
     // ---------------- NORMAL GROUP SEND ----------------
     const groups = Object.keys(groupCommandsCache).filter(
-      gid => groupCommandsCache[gid]?.manhwadaily === "on"
+      gid => groupCommandsCache[gid]?.manhwadaily === "on" && groupCommandsCache[gid]?.bot !== "off"
     );
 
     console.log(`📢 Sending manhwa recommendation to ${groups.length} groups`);
@@ -2419,7 +2426,6 @@ to download wallpaper`;
 🖼 ${w.title}`
         }).catch(()=>null);
 
-        // store wallpaper metadata for reply detection
         if (msg?.key?.id) {
           wallpaperReplyCache[msg.key.id] = w;
         }
@@ -2431,10 +2437,17 @@ to download wallpaper`;
       return;
     }
 
-    // NORMAL RUN
-    const groups = Object.keys(groupCommandsCache).filter(
-      gid => groupCommandsCache[gid]?.wallpaperdaily === "on"
-    );
+    // ✅ NORMAL RUN — FILTER GROUPS
+    const groups = Object.keys(groupCommandsCache).filter(gid => {
+
+      const cfg = groupCommandsCache[gid];
+
+      return (
+        cfg?.wallpaperdaily === "on" &&   // wallpaper enabled
+        cfg?.bot !== "off"                // bot NOT disabled
+      );
+
+    });
 
     console.log(`📢 Sending wallpapers to ${groups.length} groups`);
 
@@ -2449,7 +2462,6 @@ to download wallpaper`;
 🖼 ${w.title}`
         }).catch(()=>null);
 
-        // store wallpaper metadata
         if (msg?.key?.id) {
           wallpaperReplyCache[msg.key.id] = w;
         }
@@ -2465,6 +2477,7 @@ to download wallpaper`;
     console.error("❌ Daily wallpaper worker error:", err.message);
 
   }
+
 }
 function generateWallpaperLinks(pageUrl) {
 
@@ -3189,10 +3202,67 @@ function getMessageContent(msg) {
 
   return "";
 }
+const GEMINI_VISION_URL =
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent";
+
+async function checkImageNSFW(imageBuffer) {
+  try {
+
+    const base64 = imageBuffer.toString("base64");
+
+    const prompt = `
+You are a safety moderation AI.
+
+Classify the image into ONLY one of these categories:
+
+SAFE
+NUDITY
+SEXUAL
+EXPLICIT
+
+Return ONLY the word.
+`;
+
+    const { data } = await axios.post(
+      `${GEMINI_VISION_URL}?key=${GEMINI_KEY}`,
+      {
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              {
+                inline_data: {
+                  mime_type: "image/jpeg",
+                  data: base64
+                }
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0,
+          topP: 0
+        }
+      },
+      { timeout: 60000 }
+    );
+
+    const text =
+      data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+    return text.trim().toUpperCase();
+
+  } catch (err) {
+
+    console.log("Gemini NSFW error:", err?.response?.data || err.message);
+    return "SAFE";
+
+  }
+}
 const warningCache = {};
 const floodWarnings = {};
 const mentionWarnings = {};
-
+const nsfwDailyLimit = {};
 async function handleGroupProtection(sock,msg){
 
 try{
@@ -3599,6 +3669,80 @@ if (settings.antisticker === "on") {
 
     return; // stop further processing
   }
+
+}
+// -------------------- ANTISEXUAL IMAGES --------------------
+
+if(settings.antisexual === "on"){
+
+const imageMsg =
+msg.message?.imageMessage ||
+msg.message?.viewOnceMessage?.message?.imageMessage ||
+msg.message?.viewOnceMessageV2?.message?.imageMessage;
+
+const isSticker =
+msg.message?.stickerMessage ||
+msg.message?.documentMessage?.mimetype === "image/webp";
+
+if(!imageMsg) return;
+if(isSticker) return;
+
+const today = new Date().toDateString();
+
+if(!nsfwDailyLimit[from])
+  nsfwDailyLimit[from] = {count:0,date:today};
+
+if(nsfwDailyLimit[from].date !== today){
+  nsfwDailyLimit[from] = {count:0,date:today};
+}
+
+if(nsfwDailyLimit[from].count >= 50){
+  return; // daily limit reached
+}
+
+nsfwDailyLimit[from].count++;
+
+try{
+
+const buffer = await downloadMediaMessage(
+msg,
+"buffer",
+{},
+{logger:console,reuploadRequest:sock.updateMediaMessage}
+);
+
+const result = await checkImageNSFW(buffer);
+
+if(["NUDITY","SEXUAL","EXPLICIT"].includes(result)){
+
+const username = userId.split("@")[0];
+
+try{
+await sock.sendMessage(from,{delete:msg.key});
+}catch{}
+
+await sock.sendMessage(from,{
+text:
+`🚫 *PROHIBITED CONTENT DETECTED*
+
+@${username} sent inappropriate imagery.
+
+This violates bot usage rules.
+User removed immediately.`,
+mentions:[userId]
+});
+
+try{
+await sock.groupParticipantsUpdate(from,[userId],"remove");
+}catch{}
+
+return;
+
+}
+
+}catch(err){
+console.log("NSFW detection error:",err.message);
+}
 
 }
 // -------------------- SLOWMODE --------------------
@@ -4366,6 +4510,255 @@ return r;
 return null;
 
 }
+
+
+const LOG_DIR = path.join(__dirname, "logs");
+if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR);
+
+const SYS_LOG = path.join(LOG_DIR, "sync_system.log");
+
+function systemLog(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`;
+  fs.appendFileSync(SYS_LOG, line);
+}
+
+// Extract message content safely
+function extractMessageContent(msg) {
+  if (!msg.message) return "";
+
+  const m = msg.message;
+
+  if (m.conversation) return m.conversation;
+  if (m.extendedTextMessage?.text) return m.extendedTextMessage.text;
+  if (m.imageMessage?.caption) return m.imageMessage.caption;
+  if (m.videoMessage?.caption) return m.videoMessage.caption;
+  if (m.documentMessage?.fileName) return m.documentMessage.fileName;
+  if (m.stickerMessage) return "[sticker]";
+  if (m.gifMessage?.caption) return m.gifMessage.caption;
+
+  return "";
+}
+
+// Log messages locally
+async function logGroupMessage(groupId, message) {
+  try {
+
+    const file = `group_${groupId.replace("@", "_")}_messages.json`;
+    const filePath = path.join(LOG_DIR, file);
+
+    let logData = { groupId, messages: [] };
+
+    if (fs.existsSync(filePath)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(filePath));
+        if (parsed.messages) logData = parsed;
+      } catch (e) {
+        systemLog(`⚠️ Failed reading message log ${file}: ${e}`);
+      }
+    }
+
+    const now = new Date().toISOString();
+
+    const type = (() => {
+      if (message.message?.imageMessage) return "image";
+      if (message.message?.videoMessage) return "video";
+      if (message.message?.documentMessage) return "document";
+      if (message.message?.stickerMessage) return "sticker";
+      if (message.message?.gifMessage) return "gif";
+      return "text";
+    })();
+
+    const content = extractMessageContent(message);
+
+    logData.messages.push({
+      timestamp: now,
+      user: message.key?.participant || message.key?.remoteJid || "unknown",
+      type,
+      content
+    });
+
+    fs.writeFileSync(filePath, JSON.stringify(logData, null, 2));
+
+  } catch (err) {
+    systemLog(`❌ logGroupMessage error: ${err}`);
+  }
+}
+
+// Update analytics locally
+async function updateGroupAnalytics(groupId, message) {
+
+  try {
+
+    const file = `group_${groupId.replace("@", "_")}_analytics.json`;
+    const filePath = path.join(LOG_DIR, file);
+
+    let data = { groupId, totalMessages: 0, users: {} };
+
+    if (fs.existsSync(filePath)) {
+      try {
+        data = JSON.parse(fs.readFileSync(filePath));
+      } catch (e) {
+        systemLog(`⚠️ Failed reading analytics log ${file}: ${e}`);
+      }
+    }
+
+    const userId = message.key?.participant || message.key?.remoteJid || "unknown";
+
+    const msgType = (() => {
+      if (message.message?.imageMessage) return "image";
+      if (message.message?.videoMessage) return "video";
+      if (message.message?.documentMessage) return "document";
+      if (message.message?.stickerMessage) return "sticker";
+      if (message.message?.gifMessage) return "gif";
+      return "text";
+    })();
+
+    data.totalMessages += 1;
+
+    if (!data.users[userId]) {
+      data.users[userId] = {
+        total: 0,
+        text: 0,
+        image: 0,
+        video: 0,
+        document: 0,
+        sticker: 0,
+        gif: 0
+      };
+    }
+
+    data.users[userId].total += 1;
+    data.users[userId][msgType] += 1;
+
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+
+  } catch (err) {
+    systemLog(`❌ updateGroupAnalytics error: ${err}`);
+  }
+}
+
+
+// Sync logs to backend
+async function syncLogsBatch() {
+
+  try {
+
+    const files = fs.readdirSync(LOG_DIR).filter(f => f.endsWith(".json"));
+
+    const messages = [];
+    const analytics = [];
+
+    for (const file of files) {
+
+      const filePath = path.join(LOG_DIR, file);
+
+      let raw;
+
+      try {
+        raw = fs.readFileSync(filePath);
+      } catch (e) {
+        systemLog(`❌ Failed reading ${file}`);
+        continue;
+      }
+
+      let data;
+
+      try {
+        data = JSON.parse(raw);
+      } catch (e) {
+        systemLog(`❌ JSON parse failed ${file}`);
+        continue;
+      }
+
+      data.fileName = file;
+
+      if (file.includes("_messages")) messages.push(data);
+      if (file.includes("_analytics")) analytics.push(data);
+    }
+
+    async function push(endpoint, payload) {
+
+      if (!payload.length) return;
+
+      try {
+
+        systemLog(`📤 Sending ${payload.length} files → ${endpoint}`);
+
+        const res = await axios.post(endpoint, { data: payload });
+
+        systemLog(`📥 Response: ${JSON.stringify(res.data)}`);
+
+        if (res.data.success) {
+
+          payload.forEach(d => {
+
+            const fp = path.join(LOG_DIR, d.fileName);
+
+            if (fs.existsSync(fp)) fs.unlinkSync(fp);
+
+          });
+
+          systemLog(`✅ Sync success (${payload.length} files)`);
+
+        } else {
+
+          systemLog(`❌ Backend error: ${res.data.error}`);
+
+        }
+
+      } catch (err) {
+
+        systemLog(`❌ Request failed: ${err}`);
+
+      }
+    }
+
+    await push("https://kiroflix.site/backend/sync_messages.php", messages);
+    await push("https://kiroflix.site/backend/sync_analytics.php", analytics);
+
+  } catch (err) {
+
+    systemLog(`❌ syncLogsBatch error: ${err}`);
+
+  }
+}
+
+async function getGroupStats(groupId) {
+
+  try {
+
+    const url = "https://kiroflix.site/backend/get_group_stats.php";
+
+    const res = await axios.get(url,{
+      params:{ group: groupId }
+    });
+
+    if(!res.data || !res.data.success){
+      console.error("Stats API error",res.data);
+      return null;
+    }
+
+    return res.data;
+
+  } catch(err){
+
+    console.error("Stats request failed:",err.message);
+    return null;
+
+  }
+
+}
+async function getUserProfile(groupId,userId){
+  try{
+    const url = "https://kiroflix.site/backend/get_user_profile.php";
+    const res = await axios.get(url,{ params:{ group: groupId, user: userId } });
+    if(!res.data || !res.data.success) return null;
+    return res.data;
+  }catch(err){
+    console.error("User profile request failed:",err.message);
+    return null;
+  }
+}
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
@@ -4391,7 +4784,6 @@ async function startBot() {
       
       await fetchBannedUsers();
       await fetchWelcomeMessages();
-      await fetchMessageStats();
       await fetchFarewellMessages(); // 👈 add this
       await fetchRanks();
       checkNewEpisodes(sock);
@@ -4402,13 +4794,11 @@ async function startBot() {
       if (!schedulerStarted) {
 
   schedulerStarted = true;
-
-  // backend jobs
-  setInterval(pushStatsToBackend, 300000);
   await fetchGroupBadWords();
       setInterval(()=>{
   saveDB(protectionDB);
 },20000);
+setInterval(syncLogsBatch, 1 * 60 * 1000);
 
   // random hourly
   runHourlyRandom(() => checkNewEpisodes(sock));
@@ -4708,6 +5098,11 @@ if (["remove", "leave"].includes(update.action)) {
     if (isGroup) {
   try {
     await handleGroupProtection(sock, msg);
+    // Log the message
+      await logGroupMessage(from, msg);
+
+      // Update analytics
+      await updateGroupAnalytics(from, msg);
   } catch(e) {
     console.error("Anti-spam error:", e);
   }
@@ -5310,56 +5705,99 @@ if (text === "/kiroflix .ranklist") {
 
   return;
 }
-if (text.toLowerCase() === "/kiroflix .myrank") {
+if (isGroup && text.toLowerCase().startsWith(".profile")) {
 
-  const user = msg.key.participant || msg.key.remoteJid;
+  let mentionedUser = msg.mentionedJid && msg.mentionedJid[0]
+    ? msg.mentionedJid[0]
+    : msg.key.participant || msg.key.remoteJid;
 
-  const data = await getUserRank(from,user);
+  const profileData = await getUserProfile(from, mentionedUser);
+  const rankData = await getUserRank(from, mentionedUser);
 
-  if (!data) {
+  if (!profileData || !rankData) {
     await sock.sendMessage(from,{
-      text:"❌ Failed to fetch your rank."
+      text:"❌ Failed to fetch profile."
     },{quoted:msg});
     return;
   }
 
-  const position = data.position || "Unranked";
-  const points = data.points || 0;
+  const userStats = profileData.user;
+  const totalMessages = userStats.messages || 0;
+  const types = userStats.types || {};
 
-  const rankName = resolveRank(from,position,points);
-  const nextRank = getNextRank(from,points);
+  const position = rankData.position || "Unranked";
+  const points = rankData.points || 0;
 
-  let progress="";
+  const rankName = resolveRank(from, position, points);
+  const nextRank = getNextRank(from, points);
+
+  // SAME progress logic as your .myrank command
+  let progressText = "";
+  let progressBar = "";
 
   if(nextRank){
 
     const need = nextRank.min_points - points;
 
-    progress=`📈 Next Rank: ${nextRank.rank_name}
+    const percent = Math.floor(((points) / nextRank.min_points) * 100);
+    const filled = Math.floor(percent / 10);
+
+    progressBar = "▰".repeat(filled) + "▱".repeat(10 - filled);
+
+    progressText =
+`📈 Next Rank: ${nextRank.rank_name}
+${progressBar} ${percent}%
 Need: ${need} points`;
 
   } else {
 
-    progress="🏆 You reached the highest rank!";
+    progressText = "🏆 You reached the highest rank!";
 
   }
 
-  const username = user.split("@")[0];
+  // Waifu
+  let waifuText = userStats.waifu
+    ? `💖 ${userStats.waifu.character_name} (${userStats.waifu.anime || "Unknown"})`
+    : "💌 You haven't selected a waifu yet. Use /kiroflix .waifu charactername";
 
-  const message = `🏅 *Your Rank*
+  // Message types
+  let typeText = "";
+  if(Object.keys(types).length > 0){
+
+    for(const [type,count] of Object.entries(types)){
+      typeText += `• ${type.toUpperCase()}: ${count}\n`;
+    }
+
+  } else {
+
+    typeText = "• No messages sent yet\n";
+
+  }
+
+  const username = mentionedUser.split("@")[0];
+
+  const message =
+`🏅 *Profile Card*
 
 👤 User: @${username}
 
-🏆 Position: ${position}
-💎 Points: ${points}
+${waifuText}
 
-🎖 Rank: ${rankName || "Unranked"}
+💎 *Points:* ${points}
+🏆 *Position:* ${position}
 
-${progress}`;
+🗂 *Total Messages:* ${totalMessages}
+
+📊 *Message Types*
+${typeText}
+
+🎖 *Rank:* ${rankName || "Unranked"}
+
+${progressText}`;
 
   await sock.sendMessage(from,{
     text:message,
-    mentions:[user]
+    mentions:[mentionedUser]
   },{quoted:msg});
 
   return;
@@ -5586,19 +6024,19 @@ return;
       
       if (isGroup && text.toLowerCase() === ".stats") {
 
-  const stats = messageStats[from];
+  const stats = await getGroupStats(from);
 
   if (!stats) {
     await sock.sendMessage(from,{
-      text:"📊 No statistics available yet for this group."
+      text:"📊 Unable to load statistics."
     });
     return;
   }
 
-  const total = stats.total || 0;
-  const users = Object.keys(stats.users).length;
+  const total = stats.total_messages || 0;
+  const users = stats.active_users || 0;
 
-  let msgText =
+  const msgText =
 `📊 *Group Usage Stats*
 
 👥 Active Users: ${users}
@@ -5612,38 +6050,25 @@ Use *.active* to see most active users.`;
 }
 if (isGroup && text.toLowerCase() === ".active") {
 
-  const stats = messageStats[from];
+  const stats = await getGroupStats(from);
 
-  if (!stats || !stats.users) {
+  if (!stats || !stats.top_users?.length) {
+
     await sock.sendMessage(from,{
       text:"🔥 No activity recorded yet."
     });
-    return;
-  }
 
-  const sorted = Object.entries(stats.users)
-    .sort((a,b) => b[1] - a[1])
-    .slice(0,10);
-
-  if (!sorted.length) {
-    await sock.sendMessage(from,{
-      text:"🔥 No active users yet."
-    });
     return;
   }
 
   let textMsg = "🔥 *Most Active Users*\n\n";
-
   let mentions = [];
 
-  sorted.forEach((user,index)=>{
+  stats.top_users.forEach((u,index)=>{
 
-    const id = user[0];
-    const count = user[1];
+    mentions.push(u.id);
 
-    mentions.push(id);
-
-    textMsg += `${index+1}. @${id.split("@")[0]} — ${count} msgs\n`;
+    textMsg += `${index+1}. @${u.id.split("@")[0]} — ${u.messages} msgs\n`;
 
   });
 
