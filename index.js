@@ -1116,92 +1116,41 @@ async function getChapterImages(chapterPath) {
 
 
 async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
-  const MAX_PAGES = 80; // reduce a bit for safety
+  const MAX_PAGES = 120;
   const urls = imageUrls.slice(0, MAX_PAGES);
 
-  const tempPDFPath = path.join(os.tmpdir(), `manhwa_${Date.now()}.pdf`);
-  const pdfStream = fs.createWriteStream(tempPDFPath);
+  try {
+    // 🔄 Optional progress message
+    await sock.sendMessage(from, {
+      text: `📄 Building PDF (${urls.length} pages)...`,
+      edit: thinkingKey
+    }).catch(() => {});
 
-  const doc = new PDFDocument({ autoFirstPage: false });
-  doc.pipe(pdfStream);
-
-  let completed = 0;
-  const limit = pLimit(2);
-
-  const processImage = async (url, index) => {
-    try {
-      const response = await axios.get(
-        `https://kirotools.onrender.com/proxy?url=${encodeURIComponent(url)}`,
-        {
-          responseType: "stream",
-          timeout: 120000
-        }
-      );
-
-      // pipe → sharp → buffer (small)
-      const transformer = sharp()
-        .rotate()
-        .resize(1000, null, { fit: "inside", withoutEnlargement: true })
-        .jpeg({ quality: 70 });
-
-      const chunks = [];
-      await new Promise((resolve, reject) => {
-        response.data
-          .pipe(transformer)
-          .on("data", (chunk) => chunks.push(chunk))
-          .on("end", resolve)
-          .on("error", reject);
-      });
-
-      const buffer = Buffer.concat(chunks);
-      const meta = await sharp(buffer).metadata();
-
-      doc.addPage({ size: [meta.width, meta.height] });
-      doc.image(buffer, 0, 0, {
-        width: meta.width,
-        height: meta.height
-      });
-
-    } catch (err) {
-      console.error(`❌ Image ${index} failed:`, err.message);
-    } finally {
-      completed++;
-
-      if (completed % 5 === 0 || completed === urls.length) {
-        await sock.sendMessage(from, {
-          text: `📄 Processed: ${completed}/${urls.length}`,
-          edit: thinkingKey
-        }).catch(() => {});
+    const response = await axios.post(
+      "https://kirotools.onrender.com/build_pdf",
+      {
+        images: urls
+      },
+      {
+        responseType: "arraybuffer",
+        timeout: 1000 * 60 * 10, // 10 min (important)
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity
       }
-    }
-  };
+    );
 
-  // sequential but limited
-  for (const fn of urls.map((url, i) => () => processImage(url, i))) {
-    await limit(fn);
+    return response.data;
+
+  } catch (err) {
+    console.error("❌ PDF API error:", err.message);
+
+    await sock.sendMessage(from, {
+      text: "❌ Failed to build PDF (server busy or timeout).",
+      edit: thinkingKey
+    }).catch(() => {});
+
+    return null;
   }
-
-  doc.end();
-
-  return new Promise((resolve, reject) => {
-    pdfStream.on("finish", async () => {
-      try {
-        // ✅ SEND FILE PATH instead of buffer
-        await sock.sendMessage(from, {
-          document: { url: tempPDFPath },
-          mimetype: "application/pdf",
-          fileName: `manhwa.pdf`
-        });
-
-        fs.unlinkSync(tempPDFPath);
-        resolve();
-      } catch (err) {
-        reject(err);
-      }
-    });
-
-    pdfStream.on("error", reject);
-  });
 }
 // ===============================
 // 🚀 MAIN MANHWA HANDLER (V2)
@@ -1274,11 +1223,15 @@ async function handleManhwaRequest(sock, text, from, thinkingKey) {
     }
 
     const pdfBuffer = await buildPDFStream(
-      imageUrls,
-      sock,
-      from,
-      thinkingKey
-    );
+  imageUrls,
+  sock,
+  from,
+  thinkingKey
+);
+
+if (!pdfBuffer) {
+  return; // stop if failed
+}
 
     const caption =
 `📖 *${manhwa.title}*
@@ -2894,282 +2847,164 @@ return null;
 }
 
 }
-
+// ------------------------ Guess Anime Game ------------------------
 const guessAnimeGames = {};
-async function validateGuessAnswers(sock, groupId){
 
-const game = guessAnimeGames[groupId];
-if(!game) return;
-
-const round = game.rounds[game.currentRound];
-const replies = game.userReplies || {};
-
-let results = {};
-
-if(Object.keys(replies).length > 0){
-
-const prompt = `
-Anime answer:
-${round.answer}
-
-User guesses:
-${JSON.stringify(replies)}
-
-Return JSON only:
-
-{
- "results":{
-   "user@jid": true,
-   "user2@jid": false
- }
-}
-`;
-
-try{
-
-const ai = await askAI(prompt);
-
-const clean = ai.replace(/```json/g,"").replace(/```/g,"").trim();
-
-const parsed = JSON.parse(clean);
-
-results = parsed.results || {};
-
-}catch(e){
-
-console.log("Guess AI validation failed");
-
+// Helper: normalize text
+function normalizeText(str) {
+  return str.replace(/[^\w\s]/g, "").toLowerCase().trim();
 }
 
+// Start the game
+async function startGuessAnimeGame(sock, groupId) {
+  if (guessAnimeGames[groupId]) return;
+
+  const anime = await fetchTrendingAnime();
+  if (!anime.length) return;
+
+  const game = await generateGuessAnime(anime);
+  if (!game) return;
+
+  guessAnimeGames[groupId] = {
+    rounds: game.rounds,
+    currentRound: 0,
+    clueIndex: 0,
+    scores: {},
+    userReplies: {},
+    correctAnswered: false,
+  };
+
+  await sock.sendMessage(groupId, {
+    text: `🎮 *Guess The Anime!*\n\nI'll give clues about an anime.\nFirst person to guess correctly wins the round!\nGet ready...`
+  });
+
+  nextGuessRound(sock, groupId);
 }
 
-let message =
-`⏰ Time's up!
-
-Correct answer:
-*${round.answer}*
-
-`;
-
-for(const user in results){
-
-if(results[user]){
-
-game.scores[user] = (game.scores[user] || 0) + 1;
-
-message += `✅ @${user.split("@")[0]} guessed correctly\n`;
-
-}else{
-
-message += `❌ @${user.split("@")[0]} wrong\n`;
-
-}
-
-}
-
-await sock.sendMessage(groupId,{
-text:message,
-mentions:Object.keys(results)
-});
-
-game.userReplies = {};
-game.currentRound++;
-
-setTimeout(()=>{
-nextGuessRound(sock,groupId);
-},4000);
-
-}
-async function startGuessAnimeGame(sock, groupId){
-
-if (guessAnimeGames[groupId]) return;
-
-const anime = await fetchTrendingAnime();
-if (!anime.length) return;
-
-const game = await generateGuessAnime(anime);
-if (!game) return;
-
-guessAnimeGames[groupId] = {
-  rounds: game.rounds,
-  currentRound: 0,
-  clueIndex: 0,
-  scores:{},
-  userReplies:{} // ⭐ collect guesses
-};
-
-await sock.sendMessage(groupId,{
-text:`🎮 *Guess The Anime!*
-
-I'll give clues about an anime.
-First person to guess wins!
-
-Get ready...`
-});
-
-nextGuessRound(sock,groupId);
-
-}
-async function nextGuessRound(sock, groupId){
-
+// Next round
+async function nextGuessRound(sock, groupId) {
   const game = guessAnimeGames[groupId];
   if (!game) return;
 
-  if (game.currentRound >= game.rounds.length){
+  if (game.currentRound >= game.rounds.length) {
     return endGuessGame(sock, groupId);
   }
 
   game.clueIndex = 0;
+  game.userReplies = {};
+  game.correctAnswered = false;
 
   const round = game.rounds[game.currentRound];
 
-  // reset replies for this round
-  game.userReplies = {};
-
-  const sent = await sock.sendMessage(groupId,{
-    text:`🎯 *Round ${game.currentRound+1}/5*
-
-Clue:
-${round.clues[0]}
-
-Reply to this message with the anime name!`
+  const sent = await sock.sendMessage(groupId, {
+    text: `🎯 *Round ${game.currentRound + 1}/${game.rounds.length}*\n\nClue:\n${round.clues[0]}\n\nReply with the anime name!`
   });
 
-  // ⭐ store message ID so we only collect replies to this clue
-  game.currentClueMessageId = sent.key.id;
+  game.currentQuestionMessageId = sent.key.id;
 
-  // start clue timer
-  game.timer = setTimeout(()=>{
-    sendNextClue(sock, groupId);
-  },15000);
-
+  game.timer = setTimeout(() => sendNextClue(sock, groupId), 15000);
 }
-async function sendNextClue(sock, groupId){
 
+// Next clue
+async function sendNextClue(sock, groupId) {
   const game = guessAnimeGames[groupId];
   if (!game) return;
 
   game.clueIndex++;
-
   const round = game.rounds[game.currentRound];
 
-  // If no more clues → validate answers with AI
-  if (game.clueIndex >= round.clues.length){
-
-    const replies = game.userReplies || {};
-    let results = {};
-
-    if (Object.keys(replies).length > 0) {
-
-      const prompt = `
-Anime answer:
-${round.answer}
-
-User guesses:
-${JSON.stringify(replies)}
-
-Return JSON only:
-
-{
- "results":{
-   "user@jid": true,
-   "user2@jid": false
- }
-}
-`;
-
-      try {
-
-        const ai = await askAI(prompt);
-
-        const clean = ai
-          .replace(/```json/g,"")
-          .replace(/```/g,"")
-          .trim();
-
-        const parsed = JSON.parse(clean);
-
-        results = parsed.results || {};
-
-      } catch(e) {
-        console.log("Guess AI validation failed");
-      }
-
-    }
-
-    let message =
-`⏰ Time's up!
-
-Correct answer:
-*${round.answer}*
-
-`;
-
-    for (const user in results) {
-
-      if (results[user]) {
-
-        game.scores[user] = (game.scores[user] || 0) + 1;
-
-        message += `✅ @${user.split("@")[0]} guessed correctly\n`;
-
-      } else {
-
-        message += `❌ @${user.split("@")[0]} wrong\n`;
-
-      }
-
-    }
-
-    await sock.sendMessage(groupId,{
-      text: message,
-      mentions: Object.keys(results)
-    });
-
-    game.userReplies = {};
-    game.currentRound++;
-
-    setTimeout(()=>{
-      nextGuessRound(sock, groupId);
-    },4000);
-
+  if (game.clueIndex >= round.clues.length) {
+    await revealRoundAnswer(sock, groupId);
     return;
-
   }
 
-  // Send next clue
-  const sent = await sock.sendMessage(groupId,{
-    text:`💡 Next clue:
-
-${round.clues[game.clueIndex]}
-
-Reply to the original clue message!`
+  await sock.sendMessage(groupId, {
+    text: `💡 Next clue:\n${round.clues[game.clueIndex]}`
   });
 
-  game.timer = setTimeout(()=>{
-    sendNextClue(sock, groupId);
-  },15000);
-
+  game.timer = setTimeout(() => sendNextClue(sock, groupId), 15000);
 }
+
+// Reveal round results
+// Reveal round results using AI validation
+async function revealRoundAnswer(sock, groupId) {
+  const game = guessAnimeGames[groupId];
+  if (!game) return;
+
+  const round = game.rounds[game.currentRound];
+  if (!round) return;
+
+  // Stop timer if running
+  if (game.timer) clearTimeout(game.timer);
+
+  let results = {};
+
+  if (Object.keys(game.userReplies).length > 0) {
+    // Build prompt for AI
+    const prompt = `
+You are an anime quiz judge.
+Question: Guess the anime from clues
+Correct answer: ${round.answer}
+User answers: ${JSON.stringify(game.userReplies)}
+Determine if each user's answer is acceptable. Ignore minor differences like seasons, English/Japanese titles, extra words. Return ONLY JSON:
+{
+  "results": {
+    "user@jid": true,
+    "user2@jid": false
+  }
+}`;
+    try {
+      const ai = await askAI(prompt); // call your AI function
+      const clean = ai.replace(/```json/g, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(clean);
+      results = parsed.results || {};
+    } catch (e) {
+      console.log("AI validation failed, fallback to auto-match");
+      // fallback: simple text match
+      for (const [user, text] of Object.entries(game.userReplies)) {
+        results[user] = normalizeText(text).includes(normalizeText(round.answer));
+      }
+    }
+  }
+
+  // Build result message
+  let message = `⏰ Time's up!\n\nCorrect answer:\n*${round.answer}*\n\n`;
+  for (const user in results) {
+    if (results[user]) {
+      game.scores[user] = (game.scores[user] || 0) + 1;
+      message += `✅ @${user.split("@")[0]} +1 point\n`;
+    } else {
+      message += `❌ @${user.split("@")[0]} wrong\n`;
+    }
+  }
+
+  await sock.sendMessage(groupId, {
+    text: message,
+    mentions: Object.keys(results)
+  });
+
+  game.userReplies = {};
+  game.correctAnswered = false;
+  game.currentRound++;
+
+  // Next round after 4 seconds
+  setTimeout(() => nextGuessRound(sock, groupId), 4000);
+}
+
+// End game and show final scores
 async function endGuessGame(sock, groupId) {
   const game = guessAnimeGames[groupId];
   if (!game) return;
 
   let board = "🏆 *Guess Anime Results*\n\n";
+  const sorted = Object.entries(game.scores).sort((a, b) => b[1] - a[1]);
 
-  const sorted = Object.entries(game.scores)
-    .sort((a, b) => b[1] - a[1]);
-
-  if (sorted.length === 0) {
-    await sock.sendMessage(groupId, {
-      text: "Nobody guessed correctly 😅"
-    });
-
+  if (!sorted.length) {
+    await sock.sendMessage(groupId, { text: "Nobody guessed correctly 😅" });
     delete guessAnimeGames[groupId];
     return;
   }
 
-  // Build final scoreboard message
   sorted.forEach(([user, score], i) => {
     board += `${i + 1}. @${user.split("@")[0]} — ${score} pts\n`;
   });
@@ -3179,32 +3014,11 @@ async function endGuessGame(sock, groupId) {
     mentions: sorted.map(([u]) => u)
   });
 
-  // ⭐ SAVE SCORES AND UPDATE RANKS
-  for (const [userId, score] of Object.entries(game.scores)) {
-    try {
-      const oldData = await getUserRank(groupId, userId);
-
-      await saveScores(groupId, { [userId]: score });
-
-      const newData = await getUserRank(groupId, userId);
-
-      if (oldData && newData) {
-        await checkRankUpdate(
-          sock,
-          groupId,
-          userId,
-          oldData.points,
-          newData.points,
-          oldData.position,
-          newData.position
-        );
-      }
-    } catch (err) {
-      console.error("❌ Failed to save/update score for user:", userId, err.message);
-    }
+  // Save scores to backend
+  for (const [user, score] of Object.entries(game.scores)) {
+    await saveScores(groupId, { [user]: score });
   }
 
-  // Clean up
   delete guessAnimeGames[groupId];
 }
 async function saveScores(groupId, scores){
@@ -5031,8 +4845,8 @@ async function startBot() {
       const { backupAuthToGithub } = require("./githubBackup");
       console.log("✅ WhatsApp connected");
       qrCodeDataURL = null; // clear QR
+       //await backupAuthToGithub(); // 👈 BACKUP SESSION
       
-      //await backupAuthToGithub(); // 👈 BACKUP SESSION
       await fetchBannedUsers();
       await fetchWelcomeMessages();
       await fetchFarewellMessages(); // 👈 add this
@@ -5511,35 +5325,29 @@ You are always welcome back!`
 
   return;
 }
-    if (isGroup && guessAnimeGames[from]) {
-
+    // ---------------------- Guess Anime Listener ----------------------
+if (isGroup && guessAnimeGames[from]) {
   const game = guessAnimeGames[from];
+  const round = game.rounds[game.currentRound];
   const user = msg.key.participant || msg.key.remoteJid;
 
-  const repliedTo = msg.message.extendedTextMessage?.contextInfo?.stanzaId;
+  if (!round) return;
 
-  if (repliedTo && repliedTo === game.currentClueMessageId) {
+  const guessText = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+  if (!guessText || guessText.length > 60) return;
 
-    if (!game.userReplies[user]) {
+  // Store answer
+  game.userReplies[user] = guessText;
 
-      const guess =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        "";
+  // If first correct answer, reveal round
+  if (!game.correctAnswered && normalizeText(guessText).includes(normalizeText(round.answer))) {
+    game.correctAnswered = true;
 
-      if (guess.length <= 60) {
+    if (game.timer) clearTimeout(game.timer);
 
-        game.userReplies[user] = guess
-          .replace(/[^\w\s]/g,"")
-          .toLowerCase()
-          .trim();
-
-      }
-
-    }
-
+    // Show round results
+    setTimeout(() => revealRoundAnswer(sock, from), 1000);
   }
-
 }
     
    
