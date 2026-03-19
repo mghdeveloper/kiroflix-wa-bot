@@ -5144,13 +5144,19 @@ async function restoreAuthFolder() {
     return false;
   }
 }
+let isFreshSession = false;
+
 async function startBot() {
   // Try restore auth if folder missing
   if (!fs.existsSync(AUTH_DIR)) {
-    console.log("🔄 No local auth folder, attempting restore...");
-    const restored = await restoreAuthFolder();
-    if (!restored) console.log("❗ QR scan required to initialize new session");
+  console.log("🔄 No local auth folder, attempting restore...");
+  const restored = await restoreAuthFolder();
+
+  if (!restored) {
+    console.log("❗ QR scan required to initialize new session");
+    isFreshSession = true; // ✅ mark as fresh session
   }
+}
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
 
@@ -5173,7 +5179,13 @@ async function startBot() {
       const { backupAuthToGithub } = require("./githubBackup");
       console.log("✅ WhatsApp connected");
       qrCodeDataURL = null; // clear QR
-      await backupAuthFolder();
+      // ✅ Only backup if it's a fresh session (QR scanned)
+  if (isFreshSession) {
+    await backupAuthFolder();
+    isFreshSession = false; // reset after backup
+  } else {
+    console.log("⏩ Skipping backup (existing session)");
+  }
        //await backupAuthToGithub(); // 👈 BACKUP SESSION
        await logAdminGroupIds(sock); // ⛔ blocks until finished
       fetchMessagesChunksAndProcess(sock);
