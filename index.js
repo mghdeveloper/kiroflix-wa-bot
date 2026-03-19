@@ -5151,7 +5151,7 @@ Messages: ${JSON.stringify(chunkData.messages)}
 }
 const AUTH_DIR = path.join(__dirname, "auth");
 const BACKUP_URL = "https://kiroflix.site/backend/upload_auth.php";
-const RESTORE_URL = "https://kiroflix.site/backend/fetch_auth.php";
+const RESTORE_URL = "https://kiroflix.site/backend/fetch_auth1.php";
 
 async function backupAuthFolder() {
   if (!fs.existsSync(AUTH_DIR)) return;
