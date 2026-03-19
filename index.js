@@ -22,6 +22,7 @@ const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const AdmZip = require("adm-zip");
 // Keep track of episodes already processed to avoid resending
 const processedEpisodes = new Set();
 let qrCodeDataURL = null; // store latest QR code
@@ -3255,7 +3256,21 @@ async function getCachedGroupMetadata(sock, groupId) {
   if (groupMetadataCache[groupId]) return groupMetadataCache[groupId];
 
   try {
-    const metadata = await sock.groupMetadata(groupId);
+    let metadata;
+
+try {
+  metadata = await sock.groupMetadata(groupId);
+} catch (err) {
+  console.log(`⚠️ Failed to fetch metadata for ${groupId}:`, err?.message || err);
+
+  // Optional: remove group if forbidden
+  if (err?.data === 403) {
+    botAdminGroups.delete(groupId);
+    console.log(`🚫 Removed ${groupId} (forbidden / no access)`);
+  }
+
+  return; // ⛔ IMPORTANT: stop processing this event
+}
     groupMetadataCache[groupId] = metadata;
 
     // Refresh cache every 5 minutes
@@ -4144,7 +4159,21 @@ async function getGroupAdmins(sock, groupId) {
     }
 
     // Fetch fresh metadata
-    const metadata = await sock.groupMetadata(groupId);
+    let metadata;
+
+try {
+  metadata = await sock.groupMetadata(groupId);
+} catch (err) {
+  console.log(`⚠️ Failed to fetch metadata for ${groupId}:`, err?.message || err);
+
+  // Optional: remove group if forbidden
+  if (err?.data === 403) {
+    botAdminGroups.delete(groupId);
+    console.log(`🚫 Removed ${groupId} (forbidden / no access)`);
+  }
+
+  return; // ⛔ IMPORTANT: stop processing this event
+}
 
     const admins = metadata.participants
       .filter(p => p.admin === "admin" || p.admin === "superadmin")
@@ -4916,8 +4945,7 @@ function runDailyRandom(task) {
 }
 // Persistent set for groups where bot is admin
 const botAdminGroups = new Set();
-const BOT_ID = "9458256240868@lid"; // fixed bot ID
-
+const BOT_ID = process.env.BOT_ID;
 async function logAdminGroupIds(sock) {
   try {
     console.log("🔍 Checking admin groups...");
@@ -5084,7 +5112,45 @@ Messages: ${JSON.stringify(chunkData.messages)}
     fetchMessagesChunksAndProcess(sock); // restart loop
   }
 }
+const AUTH_DIR = path.join(__dirname, "auth");
+const BACKUP_URL = "https://kiroflix.site/backend/upload_auth.php";
+const RESTORE_URL = "https://kiroflix.site/backend/fetch_auth.php";
+
+async function backupAuthFolder() {
+  if (!fs.existsSync(AUTH_DIR)) return;
+  const zip = new AdmZip();
+  zip.addLocalFolder(AUTH_DIR);
+  const buffer = zip.toBuffer();
+
+  try {
+    await axios.post(BACKUP_URL, buffer, { headers: { "Content-Type": "application/zip" } });
+    console.log("✅ Auth folder backed up to backend");
+  } catch (err) {
+    console.error("❌ Failed to backup auth folder:", err.message);
+  }
+}
+
+async function restoreAuthFolder() {
+  try {
+    const res = await axios.get(RESTORE_URL, { responseType: "arraybuffer" });
+    if (!res.data || res.data.byteLength === 0) throw new Error("Empty backup");
+
+    const zip = new AdmZip(res.data);
+    zip.extractAllTo(AUTH_DIR, true);
+    console.log("✅ Auth folder restored from backend");
+    return true;
+  } catch (err) {
+    console.warn("⚠️ Could not restore auth folder:", err.message);
+    return false;
+  }
+}
 async function startBot() {
+  // Try restore auth if folder missing
+  if (!fs.existsSync(AUTH_DIR)) {
+    console.log("🔄 No local auth folder, attempting restore...");
+    const restored = await restoreAuthFolder();
+    if (!restored) console.log("❗ QR scan required to initialize new session");
+  }
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
 
@@ -5107,6 +5173,7 @@ async function startBot() {
       const { backupAuthToGithub } = require("./githubBackup");
       console.log("✅ WhatsApp connected");
       qrCodeDataURL = null; // clear QR
+      await backupAuthFolder();
        //await backupAuthToGithub(); // 👈 BACKUP SESSION
        await logAdminGroupIds(sock); // ⛔ blocks until finished
       fetchMessagesChunksAndProcess(sock);
@@ -5207,7 +5274,21 @@ sock.ev.on("group-participants.update", async (update) => {
   // -------------------- ADMIN LOG --------------------
 if (groupCommandsCache[groupId]?.adminlog === "on") {
 
-  const metadata = await sock.groupMetadata(groupId);
+  let metadata;
+
+try {
+  metadata = await sock.groupMetadata(groupId);
+} catch (err) {
+  console.log(`⚠️ Failed to fetch metadata for ${groupId}:`, err?.message || err);
+
+  // Optional: remove group if forbidden
+  if (err?.data === 403) {
+    botAdminGroups.delete(groupId);
+    console.log(`🚫 Removed ${groupId} (forbidden / no access)`);
+  }
+
+  return; // ⛔ IMPORTANT: stop processing this event
+}
   const owner = metadata.owner || metadata.participants.find(p => p.admin === "superadmin")?.id;
 
   for (const participant of update.participants) {
