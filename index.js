@@ -4928,30 +4928,20 @@ async function logAdminGroupIds(sock) {
     for (const groupId in groups) {
       const group = groups[groupId];
 
-      // Log participants for debug
-      console.log(`\n📝 Group: ${group.subject} (${groupId})`);
-      group.participants.forEach(p => console.log("   ", p.id, "| admin:", p.admin));
-
       // Find bot by fixed ID
       const bot = group.participants.find(p => p.id === BOT_ID);
-
-      if (!bot) {
-        console.log(`⚠️ Bot not found in: ${groupId}`);
-        continue;
-      }
+      if (!bot) continue;
 
       const isAdmin = bot.admin === "admin" || bot.admin === "superadmin";
       if (isAdmin) {
-        botAdminGroups.add(groupId); // ✅ store in the set
-        console.log(`🟢 Bot is admin in group: ${groupId}`);
+        botAdminGroups.add(groupId); // store in the set
       } else {
         botAdminGroups.delete(groupId); // ensure removed if not admin
-        console.log(`🔴 Bot is NOT admin in group: ${groupId}`);
       }
     }
 
-    console.log("✅ Done checking admin groups");
-    console.log("📌 Current bot-admin groups:", [...botAdminGroups]);
+    // Log only the final list of admin groups
+    console.log("✅ Bot-admin groups:", [...botAdminGroups]);
 
   } catch (err) {
     console.error("❌ Admin group check failed:", err);
