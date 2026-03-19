@@ -27,6 +27,8 @@ const AdmZip = require("adm-zip");
 const processedEpisodes = new Set();
 let qrCodeDataURL = null; // store latest QR code
 let schedulerStarted = false;
+let sockInstance = null; // store global socket
+
 // Maximum message length allowed for processing
 const MAX_MESSAGE_LENGTH = 300; // or whatever limit you prefer
 app.get("/", async (_, res) => {
@@ -44,7 +46,42 @@ app.get("/", async (_, res) => {
     `);
   }
 });
+app.get("/reset-auth", async (req, res) => {
+  try {
+    console.log("⚠️ Reset auth requested");
 
+    // 1. Close socket safely
+    if (sockInstance) {
+      try {
+        await sockInstance.logout();
+      } catch (e) {}
+      try {
+        sockInstance.end();
+      } catch (e) {}
+    }
+
+    // 2. Delete auth folder
+    if (fs.existsSync(AUTH_DIR)) {
+      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+      console.log("🗑️ Auth folder deleted");
+    }
+
+    // 3. Restart bot
+    setTimeout(() => {
+      console.log("🔄 Restarting bot for new QR...");
+      startBot();
+    }, 2000);
+
+    res.json({
+      success: true,
+      message: "Auth reset. Scan new QR."
+    });
+
+  } catch (err) {
+    console.error("❌ Reset failed:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 app.listen(PORT, () => console.log("[SERVER] Running on", PORT));
 // Track users that are currently being processed
 const userLocks = new Map();
@@ -5166,6 +5203,7 @@ async function startBot() {
     auth: state,
     browser: ["Kiroflix Bot", "Chrome", "1.0"]
   });
+  sockInstance = sock; // ✅ store reference
   await fetchGroupsFromBackend();
 
   // 🟢 Connection events
