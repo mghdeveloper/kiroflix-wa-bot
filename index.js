@@ -4916,7 +4916,7 @@ function runDailyRandom(task) {
 }
 // Persistent set for groups where bot is admin
 const botAdminGroups = new Set();
-const BOT_ID = "39742070591496@lid"; // fixed bot ID
+const BOT_ID = "165755874197729@lid"; // fixed bot ID
 
 async function logAdminGroupIds(sock) {
   try {
