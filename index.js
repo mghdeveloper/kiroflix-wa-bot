@@ -588,7 +588,7 @@ ${prompt}
           topP: 0
         }
       },
-      { timeout: 15000 }
+      { timeout: 120000 }
     );
 
     return data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
@@ -912,20 +912,22 @@ async function parseManhwaIntent(text) {
     const prompt = `
 You are a manhwa title parser.
 
-You are given real search engine results.
-
-Use them ONLY to:
-- confirm official English title
-- correct typos
-- detect correct chapter number
+STRICT RULES:
+- DO NOT rename or replace the title
+- DO NOT convert to official names
+- KEEP the original user wording
+- ONLY fix:
+  • spacing issues
+  • obvious typos
+  • capitalization (optional)
 
 --------------------------------
-SEARCH RESULTS:
+SEARCH RESULTS (for reference only, DO NOT rename from it):
 ${searchData}
 --------------------------------
 
 GOAL:
-1️⃣ Convert title to official English name if confirmed
+1️⃣ Extract the title EXACTLY as the user intended (light cleanup only)
 2️⃣ Extract chapter number
 3️⃣ If chapter missing → 1
 4️⃣ If unclear → {"notFound": true}
@@ -933,7 +935,7 @@ GOAL:
 Return ONLY JSON:
 
 {
-  "title": "official manhwa title",
+  "title": "cleaned user title",
   "chapter": number,
   "notFound": false
 }
@@ -1115,41 +1117,108 @@ async function getChapterImages(chapterPath) {
 
 
 
-async function buildPDFStream(imageUrls, sock, from, thinkingKey) {
-  const MAX_PAGES = 120;
-  const urls = imageUrls.slice(0, MAX_PAGES);
-
+async function startPDFJob(imageUrls) {
   try {
-    // 🔄 Optional progress message
-    await sock.sendMessage(from, {
-      text: `📄 Building PDF (${urls.length} pages)...`,
-      edit: thinkingKey
-    }).catch(() => {});
+    const res = await axios.post(
+      "https://kirotools.onrender.com/build_pdf_async",
+      { images: imageUrls },
+      { timeout: 30000 }
+    );
 
-    const response = await axios.post(
-      "https://kirotools.onrender.com/build_pdf",
+    if (!res.data?.jobId) {
+      console.error("❌ No jobId returned:", res.data);
+      throw new Error("Invalid job response");
+    }
+
+    console.log("✅ PDF Job started:", res.data.jobId);
+
+    return res.data.jobId;
+
+  } catch (err) {
+    console.error("❌ startPDFJob ERROR:", {
+      message: err.message,
+      response: err.response?.data
+    });
+
+    throw err;
+  }
+}
+async function waitForPDF(jobId, sock, from, progressKey) {
+  let attempts = 0;
+  let lastProgress = -1; // 🔥 prevent spam
+
+  while (true) {
+    await new Promise(r => setTimeout(r, 3000));
+    attempts++;
+
+    try {
+      const { data } = await axios.get(
+        "https://kirotools.onrender.com/pdf_status",
+        { params: { jobId }, timeout: 120000 }
+      );
+
+      console.log("📊 PDF STATUS:", data);
+
+      if (data.status === "processing") {
+
+        // 🔥 only update if progress changed
+        if (data.progress !== lastProgress) {
+          lastProgress = data.progress;
+
+          await sock.sendMessage(from, {
+            text: `📄 Building PDF... ${data.progress}%`,
+            edit: progressKey
+          }).catch(err => {
+            console.error("❌ Edit failed:", err.message);
+          });
+        }
+      }
+
+      if (data.status === "done") {
+        await sock.sendMessage(from, {
+          text: `✅ PDF ready (100%)`,
+          edit: progressKey
+        }).catch(() => {});
+        return true;
+      }
+
+      if (data.status === "error") {
+        throw new Error(data.error || "PDF failed");
+      }
+
+      if (attempts > 100) {
+        throw new Error("PDF timeout exceeded");
+      }
+
+    } catch (err) {
+      console.error("❌ waitForPDF ERROR:", err.message);
+
+      if (attempts > 10) throw err;
+    }
+  }
+}
+async function downloadPDF(jobId) {
+  try {
+    const res = await axios.get(
+      "https://kirotools.onrender.com/pdf_download",
       {
-        images: urls
-      },
-      {
+        params: { jobId },
         responseType: "arraybuffer",
-        timeout: 1000 * 60 * 10, // 10 min (important)
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity
+        timeout: 120000
       }
     );
 
-    return response.data;
+    console.log("✅ PDF downloaded:", res.data.length, "bytes");
+
+    return res.data;
 
   } catch (err) {
-    console.error("❌ PDF API error:", err.message);
+    console.error("❌ downloadPDF ERROR:", {
+      message: err.message,
+      response: err.response?.data
+    });
 
-    await sock.sendMessage(from, {
-      text: "❌ Failed to build PDF (server busy or timeout).",
-      edit: thinkingKey
-    }).catch(() => {});
-
-    return null;
+    throw err;
   }
 }
 // ===============================
@@ -1222,15 +1291,38 @@ async function handleManhwaRequest(sock, text, from, thinkingKey) {
 
     }
 
-    const pdfBuffer = await buildPDFStream(
-  imageUrls,
-  sock,
-  from,
-  thinkingKey
-);
+    let jobId;
+let pdfBuffer;
+
+try {
+  const progressMsg = await sock.sendMessage(from, {
+  text: "📄 Preparing PDF..."
+});
+
+const progressKey = progressMsg.key;
+  jobId = await startPDFJob(imageUrls);
+
+  await waitForPDF(jobId, sock, from, progressKey);
+
+  pdfBuffer = await downloadPDF(jobId);
+
+} catch (pdfErr) {
+  console.error("❌ PDF PIPELINE ERROR:", pdfErr);
+
+  await sock.sendMessage(from, {
+    text: `❌ PDF generation failed:\n${pdfErr.message}`,
+    edit: searchKey
+  });
+
+  return;
+}
 
 if (!pdfBuffer) {
-  return; // stop if failed
+  console.error("❌ Empty PDF buffer");
+  return sock.sendMessage(from, {
+    text: "❌ Failed to generate PDF (empty file).",
+    edit: searchKey
+  });
 }
 
     const caption =
@@ -3150,7 +3242,7 @@ const base64Regex =
 
 const unicodeDomain =
 /xn--[a-z0-9]+/i;
-function normalizeText(text=""){
+function normalizeText1(text=""){
 return text
 .replace(/[*_~`]/g,"")
 .replace(/[\u200B-\u200F\u202A-\u202E]/g,"")
@@ -3457,7 +3549,7 @@ if (settings.antiflood === "on") {
 // -------------------- ANTILINKS ULTRA --------------------
 if(settings.antilinks === "on"){
 
-  const cleanText = normalizeText(text);
+  const cleanText = normalizeText1(text);
 
   // WhatsApp hidden structures
   const hasExternalPreview =
@@ -4822,6 +4914,186 @@ function runDailyRandom(task) {
   scheduleNext();
 
 }
+// Persistent set for groups where bot is admin
+const botAdminGroups = new Set();
+const BOT_ID = "39742070591496@lid"; // fixed bot ID
+
+async function logAdminGroupIds(sock) {
+  try {
+    console.log("🔍 Checking admin groups...");
+
+    const groups = await sock.groupFetchAllParticipating();
+    console.log("📊 Groups found:", Object.keys(groups).length);
+
+    for (const groupId in groups) {
+      const group = groups[groupId];
+
+      // Log participants for debug
+      console.log(`\n📝 Group: ${group.subject} (${groupId})`);
+      group.participants.forEach(p => console.log("   ", p.id, "| admin:", p.admin));
+
+      // Find bot by fixed ID
+      const bot = group.participants.find(p => p.id === BOT_ID);
+
+      if (!bot) {
+        console.log(`⚠️ Bot not found in: ${groupId}`);
+        continue;
+      }
+
+      const isAdmin = bot.admin === "admin" || bot.admin === "superadmin";
+      if (isAdmin) {
+        botAdminGroups.add(groupId); // ✅ store in the set
+        console.log(`🟢 Bot is admin in group: ${groupId}`);
+      } else {
+        botAdminGroups.delete(groupId); // ensure removed if not admin
+        console.log(`🔴 Bot is NOT admin in group: ${groupId}`);
+      }
+    }
+
+    console.log("✅ Done checking admin groups");
+    console.log("📌 Current bot-admin groups:", [...botAdminGroups]);
+
+  } catch (err) {
+    console.error("❌ Admin group check failed:", err);
+  }
+}
+
+// Your existing askAI function stays the same
+
+
+// Directory to store group history points
+const historyDir = path.join(__dirname, "group_points_history");
+if (!fs.existsSync(historyDir)) fs.mkdirSync(historyDir, { recursive: true });
+
+// Sleep utility
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// ========================
+// Main loop: process messages + AI + quiz points
+// ========================
+async function fetchMessagesChunksAndProcess(sock) {
+  try {
+    while (true) {
+      console.log("🔍 Fetching messages for admin groups...");
+
+      const botAdminGroupsArray = [...botAdminGroups];
+      if (!botAdminGroupsArray.length) {
+        console.log("⚠️ No admin groups. Sleeping 1 hour...");
+        await sleep(3600 * 1000);
+        continue;
+      }
+
+      const groupsPayload = botAdminGroupsArray.map(gid => ({
+        groupId: gid,
+        messages: [] // backend merges messages
+      }));
+
+      let res;
+      try {
+        res = await axios.post(
+          "https://kiroflix.site/backend/fetch_messages_chunk.php",
+          { groups: groupsPayload, botAdminGroups: botAdminGroupsArray },
+          { timeout: 15000 }
+        );
+      } catch (err) {
+        console.error("❌ Failed fetching chunks:", err.message);
+        await sleep(3600 * 1000);
+        continue;
+      }
+
+      if (!res.data.success) {
+        console.error("❌ Backend returned error:", res.data);
+        await sleep(3600 * 1000);
+        continue;
+      }
+
+      const chunks = res.data.data;
+      let anyProcessed = false;
+
+      for (const gid in chunks) {
+        const chunkData = chunks[gid];
+        if (chunkData === "skip") {
+          console.log(`⚠️ Skipped group ${gid}, chunk < 100`);
+          continue;
+        }
+
+        anyProcessed = true;
+
+        // Build AI prompt
+        const prompt = `
+You are an AI inside an anime & manhwa bot named Kiroflix Bot.
+Analyze these 100 messages and assign general points (0–5) per user based on:
+- Participation
+- Message quality (meaningful, non-spam)
+- Respect toward others
+- Correct bot usage (commands, quizzes)
+- Admin actions/efforts
+Do NOT assign points per message. Give a summary per user in JSON.
+
+Messages: ${JSON.stringify(chunkData.messages)}
+`;
+
+        const aiResponse = await askAI(prompt);
+        console.log(`📝 AI summary points for group ${gid}:\n`, aiResponse);
+
+        // Save full AI response in group history
+        const groupFile = path.join(historyDir, `${gid}.json`);
+        let history = [];
+        if (fs.existsSync(groupFile)) {
+          try {
+            history = JSON.parse(fs.readFileSync(groupFile, "utf-8")) || [];
+          } catch {}
+        }
+        history.push({ timestamp: new Date().toISOString(), aiResponse });
+        fs.writeFileSync(groupFile, JSON.stringify(history, null, 2));
+
+        // Clean AI JSON (remove ```json blocks)
+        const aiResponseClean = aiResponse.replace(/```json/g, "").replace(/```/g, "").trim();
+
+        let userPoints = {};
+        try {
+          userPoints = JSON.parse(aiResponseClean);
+        } catch (err) {
+          console.error("❌ Failed parsing AI JSON:", err.message);
+          continue;
+        }
+
+        // Save points using quiz system
+        for (const [userId, data] of Object.entries(userPoints)) {
+          const pts = data.points || 0;
+
+          const oldData = await getUserRank(gid, userId);
+          await saveScores(gid, { [userId]: pts }); // quiz save function
+          const newData = await getUserRank(gid, userId);
+
+          if (oldData && newData) {
+            await checkRankUpdate(
+              sock,
+              gid,
+              userId,
+              oldData.points,
+              newData.points,
+              oldData.position,
+              newData.position
+            );
+          }
+        }
+
+      }
+
+      if (!anyProcessed) {
+        console.log("⏱ No chunks to process. Sleeping 1 hour...");
+        await sleep(3600 * 1000);
+      } else {
+        await sleep(5000); // short pause before next fetch
+      }
+    }
+  } catch (err) {
+    console.error("❌ Error in fetchMessagesChunksAndProcess loop:", err);
+    await sleep(60000);
+    fetchMessagesChunksAndProcess(sock); // restart loop
+  }
+}
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
@@ -4846,6 +5118,8 @@ async function startBot() {
       console.log("✅ WhatsApp connected");
       qrCodeDataURL = null; // clear QR
        //await backupAuthToGithub(); // 👈 BACKUP SESSION
+       await logAdminGroupIds(sock); // ⛔ blocks until finished
+      fetchMessagesChunksAndProcess(sock);
       
       await fetchBannedUsers();
       await fetchWelcomeMessages();
@@ -4926,6 +5200,20 @@ setInterval(async () => {
   // -------------------- WELCOME NEW MEMBERS --------------------
 sock.ev.on("group-participants.update", async (update) => {
   const groupId = update.id;
+  for (const participant of update.participants) {
+    const userJid = typeof participant === "string" ? participant : participant?.id;
+    if (!userJid) continue;
+
+    if (userJid !== BOT_ID) continue; // only track the bot
+
+    if (update.action === "promote") {
+      botAdminGroups.add(groupId);
+      console.log(`🟢 Bot promoted in group ${groupId}. Added to list.`);
+    } else if (update.action === "demote") {
+      botAdminGroups.delete(groupId);
+      console.log(`🔴 Bot demoted in group ${groupId}. Removed from list.`);
+    }
+  }
   // -------------------- ADMIN LOG --------------------
 if (groupCommandsCache[groupId]?.adminlog === "on") {
 
