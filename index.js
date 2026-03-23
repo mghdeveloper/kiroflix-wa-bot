@@ -5462,14 +5462,7 @@ async function startBot() {
       const { backupAuthToGithub } = require("./githubBackup");
       console.log("✅ WhatsApp connected");
       qrCodeDataURL = null; // clear QR
-      // ✅ Only backup if it's a fresh session (QR scanned)
-  if (isFreshSession) {
-    await backupAuthFolder();
-    isFreshSession = false; // reset after backup
-  } else {
-    console.log("⏩ Skipping backup (existing session)");
-    isFreshSession = false;
-  }
+      
        //await backupAuthToGithub(); // 👈 BACKUP SESSION
        await logAdminGroupIds(sock); // ⛔ blocks until finished
       fetchMessagesChunksAndProcess(sock);
