@@ -5365,8 +5365,8 @@ Messages: ${JSON.stringify(chunkData.messages)}
   }
 }
 const AUTH_DIR = path.join(__dirname, "auth");
-const BACKUP_URL = "https://kiroflix.site/backend/upload_auth.php";
-const RESTORE_URL = "https://kiroflix.site/backend/fetch_auth1.php";
+const BACKUP_URL = "https://kiroflix.cu.ma/bot/upload_auth.php";
+const RESTORE_URL = "https://kiroflix.cu.ma/bot/fetch_auth1.php";
 
 async function backupAuthFolder() {
   if (!fs.existsSync(AUTH_DIR)) return;
@@ -5429,7 +5429,12 @@ async function getPlatformProfile(whatsappId) {
 }
 async function startBot() {
   // ✅ Only backup if it's a fresh session (QR scanned)
-  await backupAuthFolder();
+  if (isFreshSession) {
+    await backupAuthFolder();
+    isFreshSession = false; // reset after backup
+  } else {
+    console.log("⏩ Skipping backup (existing session)");
+  }
   
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
