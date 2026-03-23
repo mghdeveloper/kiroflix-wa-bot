@@ -6676,12 +6676,12 @@ ${progressText}`;
 }
  // 💖 WAIFU CLAIM
 // 💖 Claim waifu
-if (isGroup && text.toLowerCase().startsWith(" .waifu ")) {
+if (isGroup && text.toLowerCase().startsWith(".waifu ")) {
 
   if (groupCommandsCache[from]?.waifu === "off") return await sock.sendMessage(from,{ text:"❌ Waifu system is disabled." });
 
   const user = msg.key.participant || msg.key.remoteJid;
-  const characterName = text.slice(17).trim();
+  const characterName = text.slice(7).trim();
   if (!characterName) return await sock.sendMessage(from,{ text:"Usage:\n .waifu <character name>" });
 
   const character = await searchAnimeCharacter(characterName);
