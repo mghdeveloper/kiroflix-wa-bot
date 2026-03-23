@@ -5428,16 +5428,7 @@ async function getPlatformProfile(whatsappId) {
   }
 }
 async function startBot() {
-  // Try restore auth if folder missing
-  if (!fs.existsSync(AUTH_DIR)) {
-  console.log("🔄 No local auth folder, attempting restore...");
-  const restored = await restoreAuthFolder();
-
-  if (!restored) {
-    console.log("❗ QR scan required to initialize new session");
-    isFreshSession = true; // ✅ mark as fresh session
-  }
-}
+  
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
 
@@ -5452,6 +5443,16 @@ async function startBot() {
 
   // 🟢 Connection events
   sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
+    // Try restore auth if folder missing
+  if (!fs.existsSync(AUTH_DIR)) {
+  console.log("🔄 No local auth folder, attempting restore...");
+  const restored = await restoreAuthFolder();
+
+  if (!restored) {
+    console.log("❗ QR scan required to initialize new session");
+    isFreshSession = true; // ✅ mark as fresh session
+  }
+}
     if (qr) {
       qrCodeDataURL = await qrcode.toDataURL(qr);
       console.log("📲 QR code updated. Scan from your browser!");
