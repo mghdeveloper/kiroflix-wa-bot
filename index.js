@@ -5468,6 +5468,7 @@ async function startBot() {
     isFreshSession = false; // reset after backup
   } else {
     console.log("⏩ Skipping backup (existing session)");
+    isFreshSession = false;
   }
        //await backupAuthToGithub(); // 👈 BACKUP SESSION
        await logAdminGroupIds(sock); // ⛔ blocks until finished
