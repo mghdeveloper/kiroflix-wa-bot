@@ -5428,6 +5428,8 @@ async function getPlatformProfile(whatsappId) {
   }
 }
 async function startBot() {
+  // ✅ Only backup if it's a fresh session (QR scanned)
+  await backupAuthFolder();
   
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
