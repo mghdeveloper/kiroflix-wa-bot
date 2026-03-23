@@ -2071,15 +2071,6 @@ async function handleMessage(sock, msg) {
   // 📅 Daily limit check
   const today = new Date().toDateString();
   const userData = dailyUsage.get(from);
-  if (!userData || userData.date !== today) {
-    dailyUsage.set(from, { count: 1, date: today });
-  } else {
-    if (userData.count >= DAILY_LIMIT) {
-      await sock.sendMessage(from, { text: "🚫 Daily limit reached.\nPlease try again tomorrow." });
-      return;
-    }
-    userData.count++;
-  }
 
   // 🔒 User lock
   if (userLocks.get(from)) {
@@ -4070,9 +4061,6 @@ if(nsfwDailyLimit[from].date !== today){
   nsfwDailyLimit[from] = {count:0,date:today};
 }
 
-if(nsfwDailyLimit[from].count >= 50){
-  return; // daily limit reached
-}
 
 nsfwDailyLimit[from].count++;
 
