@@ -3873,9 +3873,10 @@ if (settings.antiflood === "on") {
     return;
   }
 }
-// -------------------- ANTI-LINKS ULTRA (Advanced) --------------------
+// -------------------- ANTI-LINK ULTRA (MEDIA ALLOWED) --------------------
 if (settings.antilinks === "on") {
-  const cleanText = normalizeText1(text);
+
+  const cleanText = normalizeText1(text || "");
 
   // WhatsApp hidden structures
   const hasExternalPreview =
@@ -3897,30 +3898,32 @@ if (settings.antilinks === "on") {
     msg.message?.extendedTextMessage?.contextInfo?.isForwarded ||
     msg.message?.extendedTextMessage?.contextInfo?.forwardingScore > 0;
 
-  const hasMedia =
-    msg.message?.imageMessage ||
-    msg.message?.videoMessage ||
-    msg.message?.documentMessage ||
-    msg.message?.audioMessage;
+  const isNewsletter =
+    msg.message?.newsletterAdminInviteMessage ||
+    msg.message?.newsletterInviteMessage;
 
-  // Base64 / disguised / normal link detection
+  // -------- Link Detection --------
+
   const base64Link = base64Regex.test(cleanText);
 
   const hasLink =
     linkRegex.test(cleanText) ||        // normal links
-    disguisedRegex.test(cleanText) ||   // disguised
-    dotRegex.test(cleanText) ||         // simple dot links
-    unicodeDomain.test(cleanText) ||    // unicode domains
+    disguisedRegex.test(cleanText) ||   // disguised domains
+    dotRegex.test(cleanText) ||         // example: google dot com
+    unicodeDomain.test(cleanText) ||    // unicode domain tricks
     base64Link ||
-    hasExternalPreview ||               // link previews
-    hasInvite ||                        // WhatsApp invites
-    hasChannelShare ||                  // forwarded newsletter / channel
-    hasButtons ||                       // interactive/template/buttons
-    isForwarded ||                      // any forwarded content
-    hasMedia;                            // media messages
+
+    // WhatsApp structures
+    hasExternalPreview ||
+    hasInvite ||
+    hasChannelShare ||
+    hasButtons ||
+    isNewsletter ||
+    isForwarded;
 
   if (hasLink) {
-    // Initialize warning tracking
+
+    // Initialize warning storage
     if (!linkWarnings[from]) linkWarnings[from] = {};
     if (!linkWarnings[from][userId]) linkWarnings[from][userId] = 0;
 
@@ -3929,36 +3932,39 @@ if (settings.antilinks === "on") {
     const warn = linkWarnings[from][userId];
     const username = userId.split("@")[0];
 
-    // Attempt to delete message first
+    // Delete message
     try {
       await sock.sendMessage(from, { delete: msg.key });
     } catch (err) {
-      console.log("⚠️ Could not delete message:", err.message);
+      console.log("⚠️ Delete failed:", err.message);
     }
 
-    // Send warning or kick user
+    // Warn user
     if (warn < 5) {
+
       await sock.sendMessage(from, {
         text:
 `┏━━━ 🚫 *ANTI-LINK PROTECTION* ━━━┓
 ┃
 ┃ ⚠️ @${username}
-┃ Links or forwarded content are not allowed here.
+┃ Links or shared channel posts are not allowed.
 ┃
 ┃ 📊 Warning: *${warn}/5*
 ┃
-┃ Please follow group rules.
+┃ Please follow the group rules.
 ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━`,
         mentions: [userId]
       });
+
     } else {
+
       await sock.sendMessage(from, {
         text:
 `┏━━━ 🔨 *ANTI-LINK SYSTEM* ━━━┓
 ┃
 ┃ @${username}
-┃ exceeded the allowed warnings.
+┃ exceeded the warning limit.
 ┃
 ┃ ❌ User removed from group
 ┃
@@ -3969,99 +3975,19 @@ if (settings.antilinks === "on") {
       try {
         await sock.groupParticipantsUpdate(from, [userId], "remove");
       } catch (err) {
-        console.log("⚠️ Could not remove user:", err.message);
+        console.log("⚠️ Kick failed:", err.message);
       }
 
       linkWarnings[from][userId] = 0;
     }
 
     // Clean protection cache
-    if (protectionCache.messages?.[from]?.[userId])
+    if (protectionCache.messages?.[from]?.[userId]) {
       delete protectionCache.messages[from][userId];
-
-    return;
-  }
-}
-// -------------------- ANTIMENTION --------------------
-
-if (settings.antimention === "on") {
-
-  const mentions =
-    msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-
-  if (!mentionWarnings[from]) mentionWarnings[from] = {};
-  if (!mentionWarnings[from][userId]) {
-    mentionWarnings[from][userId] = {
-      warnings: 0,
-      history: []
-    };
-  }
-
-  const data = mentionWarnings[from][userId];
-  const now = Date.now();
-
-  // store mention activity
-  data.history.push({
-    count: mentions.length,
-    time: now
-  });
-
-  // keep only last 15 seconds
-  data.history = data.history.filter(m => now - m.time < 15000);
-
-  const mentionTotal =
-    data.history.reduce((a,b)=>a + b.count,0);
-
-  const invisible =
-    /[\u200B-\u200F\u202A-\u202E]/;
-
-  const isInvisibleSpam =
-    invisible.test(text) && mentions.length >= 2;
-
-  const isMassMention =
-    mentions.length >= 6;
-
-  const isBurstMention =
-    mentionTotal >= 10;
-
-  if (isMassMention || isBurstMention || isInvisibleSpam) {
-
-    data.warnings++;
-
-    try {
-      await sock.sendMessage(from,{delete:msg.key});
-    } catch {}
-
-    if (data.warnings <= 3) {
-
-      await sock.sendMessage(from,{
-        text:`⚠️ ${mention} mention spam detected\nWarning ${data.warnings}/3`,
-        mentions:[userId]
-      });
-
-    }
-
-    if (data.warnings > 3) {
-
-      await sock.sendMessage(from,{
-        text:`🚫 ${mention} removed for mention spam`,
-        mentions:[userId]
-      });
-
-      try {
-        await sock.groupParticipantsUpdate(from,[userId],"remove");
-      } catch {}
-
-      data.warnings = 0;
-      data.history = [];
-
-      if (protectionCache.messages?.[from]?.[userId])
-        delete protectionCache.messages[from][userId];
     }
 
     return;
   }
-
 }
 // -------------------- ANTIBADWORDS --------------------
 
@@ -5429,12 +5355,7 @@ async function getPlatformProfile(whatsappId) {
 }
 async function startBot() {
   // ✅ Only backup if it's a fresh session (QR scanned)
-  if (isFreshSession) {
-    await backupAuthFolder();
-    isFreshSession = false; // reset after backup
-  } else {
-    console.log("⏩ Skipping backup (existing session)");
-  }
+  await backupAuthFolder();
   
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
