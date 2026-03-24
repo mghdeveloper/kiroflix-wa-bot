@@ -5429,7 +5429,7 @@ async function backupAuthFolder() {
 
     await axios.post(BACKUP_URL, buffer, {
       headers: { "Content-Type": "application/zip" },
-      timeout: 20000
+      timeout: 120000
     });
 
     console.log("✅ Auth folder backed up to backend");
