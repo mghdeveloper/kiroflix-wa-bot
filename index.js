@@ -29,6 +29,11 @@ let qrCodeDataURL = null; // store latest QR code
 let schedulerStarted = false;
 let sockInstance = null; // store global socket
 let qrScanned = false;
+const nsfwWarnings = {}; 
+// { userId: { warned: true, bannedUntil: timestamp } }
+
+const userImageQueue = {};
+const userProcessing = {};
 // Maximum message length allowed for processing
 const MAX_MESSAGE_LENGTH = 300; // or whatever limit you prefer
 app.get("/", async (_, res) => {
@@ -4119,78 +4124,126 @@ if (settings.antistickers === "on") {
 }
 // -------------------- ANTISEXUAL IMAGES --------------------
 
-if(settings.antisexual === "on"){
+if (settings.antisexual === "on") {
 
 const imageMsg =
-msg.message?.imageMessage ||
-msg.message?.viewOnceMessage?.message?.imageMessage ||
-msg.message?.viewOnceMessageV2?.message?.imageMessage;
+  msg.message?.imageMessage ||
+  msg.message?.viewOnceMessage?.message?.imageMessage ||
+  msg.message?.viewOnceMessageV2?.message?.imageMessage;
 
 const isSticker =
-msg.message?.stickerMessage ||
-msg.message?.documentMessage?.mimetype === "image/webp";
+  msg.message?.stickerMessage ||
+  msg.message?.documentMessage?.mimetype === "image/webp";
 
-if(!imageMsg) return;
-if(isSticker) return;
+if (!imageMsg || isSticker) return;
 
-const today = new Date().toDateString();
+const userKey = userId;
+const now = Date.now();
 
-if(!nsfwDailyLimit[from])
-  nsfwDailyLimit[from] = {count:0,date:today};
+// ================= BAN CHECK =================
+if (nsfwWarnings[userKey]?.bannedUntil > now) {
 
-if(nsfwDailyLimit[from].date !== today){
-  nsfwDailyLimit[from] = {count:0,date:today};
+  // ❌ user violated ban → delete + kick
+  try {
+    await sock.sendMessage(from, { delete: msg.key });
+  } catch {}
+
+  await sock.sendMessage(from, {
+    text: `🚫 @${userId.split("@")[0]}, you violated the 24h image ban.\nYou have been removed.`,
+    mentions: [userId]
+  });
+
+  try {
+    await sock.groupParticipantsUpdate(from, [userId], "remove");
+  } catch {}
+
+  return;
 }
 
-if(nsfwDailyLimit[from].count >= 50){
-  return; // daily limit reached
+// ================= QUEUE SYSTEM =================
+if (!userImageQueue[userKey]) userImageQueue[userKey] = [];
+userImageQueue[userKey].push(msg);
+
+// If already processing → don't start another
+if (userProcessing[userKey]) return;
+
+userProcessing[userKey] = true;
+
+// ================= PROCESS QUEUE =================
+while (userImageQueue[userKey].length > 0) {
+
+  const currentMsg = userImageQueue[userKey].shift();
+
+  try {
+
+    const buffer = await downloadMediaMessage(
+      currentMsg,
+      "buffer",
+      {},
+      { logger: console, reuploadRequest: sock.updateMediaMessage }
+    );
+
+    const result = await checkImageNSFW(buffer);
+
+    if (["NUDITY", "EXPLICIT"].includes(result.category)) {
+
+      const username = userId.split("@")[0];
+
+      // 🧹 delete current image
+      try {
+        await sock.sendMessage(from, { delete: currentMsg.key });
+      } catch {}
+
+      // 🧹 delete ALL remaining queued images
+      while (userImageQueue[userKey].length > 0) {
+        const extraMsg = userImageQueue[userKey].shift();
+        try {
+          await sock.sendMessage(from, { delete: extraMsg.key });
+        } catch {}
+      }
+
+      // ================= WARNING SYSTEM =================
+      if (!nsfwWarnings[userKey]) {
+
+        nsfwWarnings[userKey] = {
+          warned: true,
+          bannedUntil: now + (24 * 60 * 60 * 1000) // 24h
+        };
+
+        await sock.sendMessage(from, {
+          text:
+`⚠️ *WARNING*
+
+@${username}, your image contained inappropriate content.
+
+🚫 You are banned from sending images for 24 hours.
+If you send another image during this time, you will be removed.`,
+          mentions: [userId]
+        });
+
+      } else {
+
+        // second offense AFTER warning → kick
+        await sock.sendMessage(from, {
+          text: `🚫 @${username}, you ignored the warning. You have been removed.`,
+          mentions: [userId]
+        });
+
+        try {
+          await sock.groupParticipantsUpdate(from, [userId], "remove");
+        } catch {}
+      }
+
+      break; // stop processing more images
+    }
+
+  } catch (err) {
+    console.log("NSFW detection error:", err.message);
+  }
 }
 
-nsfwDailyLimit[from].count++;
-
-try{
-
-const buffer = await downloadMediaMessage(
-msg,
-"buffer",
-{},
-{logger:console,reuploadRequest:sock.updateMediaMessage}
-);
-
-const result = await checkImageNSFW(buffer);
-
-if(["NUDITY","SEXUAL","EXPLICIT"].includes(result.category)){
-
-const username = userId.split("@")[0];
-
-try{
-await sock.sendMessage(from,{delete:msg.key});
-}catch{}
-
-await sock.sendMessage(from,{
-text:
-`🚫 *IMAGE REMOVED*
-
-@${username}, your image violated the group safety policy.
-
-*AI Analysis:* ${result.reason}
-
-Please keep the group respectful.`,
-mentions:[userId]
-});
-
-try{
-await sock.groupParticipantsUpdate(from,[userId],"remove");
-}catch{}
-
-return;
-
-}
-
-}catch(err){
-console.log("NSFW detection error:",err.message);
-}
-
+// done processing
+userProcessing[userKey] = false;
 }
 // -------------------- SLOWMODE --------------------
 if (settings.slowmode === "on") {
