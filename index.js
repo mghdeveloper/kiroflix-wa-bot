@@ -5548,7 +5548,6 @@ async function startBot() {
     if (restored) {
       console.log("♻️ Backup found → restarting with restored session");
 
-      wipeAuth(); // remove partial auth
       await restoreAuthFolder();
 
       process.exit(0); // restart (Render reboot)
