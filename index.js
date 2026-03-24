@@ -257,10 +257,10 @@ adminOnly:true,
 adminPromote:false
 },
 
-antisticker:{
+antistickers:{
 category:"PROTECTION",
 description:"Prevent sticker spam.",
-usage:".antisticker on/off",
+usage:".antistickers on/off",
 adminOnly:true,
 adminPromote:false
 },
@@ -303,10 +303,10 @@ adminOnly:true,
 adminPromote:false
 },
 
-stickers:{
+stickersmaker:{
 category:"MEDIA",
 description:"Enable sticker creation commands.",
-usage:".stickers on/off",
+usage:".stickersmaker on/off",
 adminOnly:false,
 adminPromote:false
 },
@@ -579,7 +579,7 @@ function logError(context, err) {
 async function buildContext(userJid, currentText, maxRecent = 5) {
   try {
     const { data } = await axios.post(
-      "https://kiroflix.site/backend/get_last_messages.php",
+      "https:/.site/backend/get_last_messages.php",
       { user_jid: userJid }
     );
 
@@ -810,7 +810,7 @@ async function searchAnime(title) {
     logStep("SEARCH TITLE", title);
 
     const { data } = await axios.get(
-      "https://kiroflix.site/backend/anime_search_v1.php",
+      "https:/.site/backend/anime_search_v1.php",
       { params: { q: title } }
     );
 
@@ -990,8 +990,9 @@ async function fetchAvailableSubtitles(episodeId) {
 function logResponse(tag, data) {
   console.log(`[${tag}]`, JSON.stringify(data, null, 2));
 }
+
 // ===============================
-// 🔹 MANHWA INTENT PARSER (STRICT ORIGINAL)
+// 🔹 MANHWA INTENT PARSER
 // ===============================
 async function parseManhwaIntent(text) {
   const searchData = await searchReference(text);
@@ -1099,6 +1100,7 @@ async function chooseBestManhwa(intent, results) {
     return results[0]; // fallback
   }
 }
+
 
 // ===============================
 // 📖 GET CHAPTER (V2)
@@ -3448,8 +3450,8 @@ async function fetchGroupsFromBackend() {
         // List of commands that default OFF
         const defaultOff = [
           "games", "waifu", "antispam", "antiflood", "antilinks",
-          "antiraid", "antimention", "antisticker", "raidlock",
-          "welcome", "mute", "slowmode", "stickers", "salutation", "antibadwords","adminlog","ultimateowner","autogames"
+          "antiraid", "antimention", "antistickers", "raidlock",
+          "welcome", "mute", "slowmode", "stickersmaker", "salutation", "antibadwords","adminlog","ultimateowner","autogames"
         ];
 
         // Initialize all commands
@@ -3637,14 +3639,19 @@ async function checkImageNSFW(imageBuffer) {
     const prompt = `
 You are a safety moderation AI.
 
-Classify the image into ONLY one of these categories:
+Analyze the image and classify it into ONE category:
 
 SAFE
 NUDITY
 SEXUAL
 EXPLICIT
 
-Return ONLY the word.
+Then give a short explanation.
+
+Return EXACTLY in this format:
+
+CATEGORY: <SAFE|NUDITY|SEXUAL|EXPLICIT>
+REASON: <short explanation why>
 `;
 
     const { data } = await axios.post(
@@ -3674,12 +3681,22 @@ Return ONLY the word.
     const text =
       data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
-    return text.trim().toUpperCase();
+    const categoryMatch = text.match(/CATEGORY:\s*(SAFE|NUDITY|SEXUAL|EXPLICIT)/i);
+    const reasonMatch = text.match(/REASON:\s*(.+)/i);
+
+    const category = categoryMatch ? categoryMatch[1].toUpperCase() : "SAFE";
+    const reason = reasonMatch ? reasonMatch[1] : "Inappropriate image detected.";
+
+    return { category, reason };
 
   } catch (err) {
 
     console.log("Gemini NSFW error:", err?.response?.data || err.message);
-    return "SAFE";
+
+    return {
+      category: "SAFE",
+      reason: ""
+    };
 
   }
 }
@@ -3864,10 +3881,10 @@ if (settings.antiflood === "on") {
     return;
   }
 }
-// -------------------- ANTI-LINK ULTRA (MEDIA ALLOWED) --------------------
+// -------------------- ANTILINKS ULTRA --------------------
 if (settings.antilinks === "on") {
 
-  const cleanText = normalizeText1(text || "");
+  const cleanText = normalizeText1(text);
 
   // WhatsApp hidden structures
   const hasExternalPreview =
@@ -3885,36 +3902,30 @@ if (settings.antilinks === "on") {
     msg.message?.templateMessage ||
     msg.message?.interactiveMessage;
 
-  const isForwarded =
-    msg.message?.extendedTextMessage?.contextInfo?.isForwarded ||
-    msg.message?.extendedTextMessage?.contextInfo?.forwardingScore > 0;
-
-  const isNewsletter =
-    msg.message?.newsletterAdminInviteMessage ||
-    msg.message?.newsletterInviteMessage;
-
-  // -------- Link Detection --------
-
+  // base64 detection
   const base64Link = base64Regex.test(cleanText);
 
-  const hasLink =
-    linkRegex.test(cleanText) ||        // normal links
-    disguisedRegex.test(cleanText) ||   // disguised domains
-    dotRegex.test(cleanText) ||         // example: google dot com
-    unicodeDomain.test(cleanText) ||    // unicode domain tricks
+  // final detection: stickers are NOT included here
+  let hasLink =
+    linkRegex.test(cleanText) ||
+    disguisedRegex.test(cleanText) ||
+    dotRegex.test(cleanText) ||
+    unicodeDomain.test(cleanText) ||
     base64Link ||
-
-    // WhatsApp structures
     hasExternalPreview ||
     hasInvite ||
     hasChannelShare ||
-    hasButtons ||
-    isNewsletter ||
-    isForwarded;
+    hasButtons;
+
+  // -------------------- WHITELIST --------------------
+  // Allow kiroflix.cu.ma links
+  const whitelistRegex = /https?:\/\/(?:www\.)?kiroflix\.cu\.ma/i;
+  if (whitelistRegex.test(cleanText)) {
+    hasLink = false; // do NOT count as link
+  }
 
   if (hasLink) {
 
-    // Initialize warning storage
     if (!linkWarnings[from]) linkWarnings[from] = {};
     if (!linkWarnings[from][userId]) linkWarnings[from][userId] = 0;
 
@@ -3923,39 +3934,30 @@ if (settings.antilinks === "on") {
     const warn = linkWarnings[from][userId];
     const username = userId.split("@")[0];
 
-    // Delete message
-    try {
-      await sock.sendMessage(from, { delete: msg.key });
-    } catch (err) {
-      console.log("⚠️ Delete failed:", err.message);
-    }
+    try { await sock.sendMessage(from, { delete: msg.key }); } catch {}
 
-    // Warn user
     if (warn < 5) {
-
       await sock.sendMessage(from, {
         text:
 `┏━━━ 🚫 *ANTI-LINK PROTECTION* ━━━┓
 ┃
 ┃ ⚠️ @${username}
-┃ Links or shared channel posts are not allowed.
+┃ Links are not allowed here.
 ┃
 ┃ 📊 Warning: *${warn}/5*
 ┃
-┃ Please follow the group rules.
+┃ Please follow group rules.
 ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━`,
         mentions: [userId]
       });
-
     } else {
-
       await sock.sendMessage(from, {
         text:
 `┏━━━ 🔨 *ANTI-LINK SYSTEM* ━━━┓
 ┃
 ┃ @${username}
-┃ exceeded the warning limit.
+┃ exceeded the allowed warnings.
 ┃
 ┃ ❌ User removed from group
 ┃
@@ -3963,22 +3965,98 @@ if (settings.antilinks === "on") {
         mentions: [userId]
       });
 
-      try {
-        await sock.groupParticipantsUpdate(from, [userId], "remove");
-      } catch (err) {
-        console.log("⚠️ Kick failed:", err.message);
-      }
+      try { await sock.groupParticipantsUpdate(from, [userId], "remove"); } catch {}
 
       linkWarnings[from][userId] = 0;
-    }
 
-    // Clean protection cache
-    if (protectionCache.messages?.[from]?.[userId]) {
-      delete protectionCache.messages[from][userId];
+      if (protectionCache.messages?.[from]?.[userId])
+        delete protectionCache.messages[from][userId];
     }
 
     return;
   }
+
+}
+// -------------------- ANTIMENTION --------------------
+
+if (settings.antimention === "on") {
+
+  const mentions =
+    msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+
+  if (!mentionWarnings[from]) mentionWarnings[from] = {};
+  if (!mentionWarnings[from][userId]) {
+    mentionWarnings[from][userId] = {
+      warnings: 0,
+      history: []
+    };
+  }
+
+  const data = mentionWarnings[from][userId];
+  const now = Date.now();
+
+  // store mention activity
+  data.history.push({
+    count: mentions.length,
+    time: now
+  });
+
+  // keep only last 15 seconds
+  data.history = data.history.filter(m => now - m.time < 15000);
+
+  const mentionTotal =
+    data.history.reduce((a,b)=>a + b.count,0);
+
+  const invisible =
+    /[\u200B-\u200F\u202A-\u202E]/;
+
+  const isInvisibleSpam =
+    invisible.test(text) && mentions.length >= 2;
+
+  const isMassMention =
+    mentions.length >= 6;
+
+  const isBurstMention =
+    mentionTotal >= 10;
+
+  if (isMassMention || isBurstMention || isInvisibleSpam) {
+
+    data.warnings++;
+
+    try {
+      await sock.sendMessage(from,{delete:msg.key});
+    } catch {}
+
+    if (data.warnings <= 3) {
+
+      await sock.sendMessage(from,{
+        text:`⚠️ ${mention} mention spam detected\nWarning ${data.warnings}/3`,
+        mentions:[userId]
+      });
+
+    }
+
+    if (data.warnings > 3) {
+
+      await sock.sendMessage(from,{
+        text:`🚫 ${mention} removed for mention spam`,
+        mentions:[userId]
+      });
+
+      try {
+        await sock.groupParticipantsUpdate(from,[userId],"remove");
+      } catch {}
+
+      data.warnings = 0;
+      data.history = [];
+
+      if (protectionCache.messages?.[from]?.[userId])
+        delete protectionCache.messages[from][userId];
+    }
+
+    return;
+  }
+
 }
 // -------------------- ANTIBADWORDS --------------------
 
@@ -4002,7 +4080,7 @@ return; // stop message processing
 
 }
 // -------------------- ANTISTICKER --------------------
-if (settings.antisticker === "on") {
+if (settings.antistickers === "on") {
 
   const isSticker =
     msg.message?.stickerMessage ||
@@ -4061,6 +4139,9 @@ if(nsfwDailyLimit[from].date !== today){
   nsfwDailyLimit[from] = {count:0,date:today};
 }
 
+if(nsfwDailyLimit[from].count >= 50){
+  return; // daily limit reached
+}
 
 nsfwDailyLimit[from].count++;
 
@@ -4075,7 +4156,7 @@ msg,
 
 const result = await checkImageNSFW(buffer);
 
-if(["NUDITY","SEXUAL","EXPLICIT"].includes(result)){
+if(["NUDITY","SEXUAL","EXPLICIT"].includes(result.category)){
 
 const username = userId.split("@")[0];
 
@@ -4085,12 +4166,13 @@ await sock.sendMessage(from,{delete:msg.key});
 
 await sock.sendMessage(from,{
 text:
-`🚫 *PROHIBITED CONTENT DETECTED*
+`🚫 *IMAGE REMOVED*
 
-@${username} sent inappropriate imagery.
+@${username}, your image violated the group safety policy.
 
-This violates bot usage rules.
-User removed immediately.`,
+*AI Analysis:* ${result.reason}
+
+Please keep the group respectful.`,
 mentions:[userId]
 });
 
@@ -4252,7 +4334,65 @@ async function handleGroupToggle(sock, from, sender, text) {
     return true;
   }
 }
+//
+// -------------------- GROUP TOGGLE HANDLER --------------------
+//
 
+async function handleGroupToggle(sock, from, sender, text) {
+  try {
+    const metadata = await sock.groupMetadata(from);
+
+    const adminIds = metadata.participants
+      .filter(p => p.admin === "admin" || p.admin === "superadmin")
+      .map(p => p.id);
+
+    // ❌ Only admins allowed
+    if (!adminIds.includes(sender)) return false;
+
+    // ❌ Only toggle if used with a dot command
+    if (!text.toLowerCase().startsWith(".")) return false;
+
+    // Example: ".games on"
+    const cmdText = text.replace(/^\./, "").trim();
+    const match = cmdText.match(/^([a-zA-Z0-9_-]+)\s+(on|off)$/i);
+    if (!match) return false;
+
+    const [, commandRaw, actionRaw] = match;
+    const command = commandRaw.toLowerCase();
+    const action = actionRaw.toLowerCase();
+
+    if (!toggledCommands[command]) return false;
+
+    // Initialize cache for group if missing
+    if (!groupCommandsCache[from]) {
+      groupCommandsCache[from] = {};
+      Object.keys(toggledCommands).forEach(cmd => (groupCommandsCache[from][cmd] = "on"));
+    }
+
+    // ✅ Update cache
+    groupCommandsCache[from][command] = action;
+
+    // ✅ Update backend
+    const result = await updateCommandStatus(from, sender, command, action);
+
+    if (result.status === "error") {
+      await sock.sendMessage(from, {
+        text: `⚠️ Failed to update command`
+      });
+    } else {
+      await sock.sendMessage(from, {
+        text: `🎯 *${command}* has been set to *${action}*`
+      });
+    }
+
+    return true;
+
+  } catch (err) {
+    console.error("❌ Failed to handle toggle:", err.message);
+    await sock.sendMessage(from, { text: `⚠️ Error updating command` });
+    return true;
+  }
+}
 // 🚫 Banned users cache
 // { groupId: [userId1, userId2] }
 let bannedUsers = {};
@@ -4477,99 +4617,7 @@ async function imageToWebp(buffer, outputPath) {
 
   console.log("✅ Sticker saved:", outputPath);
 }
-// 📊 Message stats cache
-// 📊 Message stats cache
-const messageStats = {};
-const messageFloodGuard = {};
 
-// Log a single message
-function logMessageStat(groupId, userId) {
-  const now = Date.now();
-
-  // Flood guard: max 4 messages per 5s
-  if (!messageFloodGuard[userId]) messageFloodGuard[userId] = [];
-  messageFloodGuard[userId] = messageFloodGuard[userId].filter(t => now - t < 5000);
-  if (messageFloodGuard[userId].length >= 4) return;
-  messageFloodGuard[userId].push(now);
-
-  // Initialize group
-  if (!messageStats[groupId]) messageStats[groupId] = { total: 0, users: {} };
-
-  messageStats[groupId].total++;
-  messageStats[groupId].users[userId] = (messageStats[groupId].users[userId] || 0) + 1;
-}
-
-// Push only **new stats** to backend
-async function pushStatsToBackend() {
-  try {
-    const payload = [];
-
-    for (const groupId in messageStats) {
-      for (const userId in messageStats[groupId].users) {
-        const count = messageStats[groupId].users[userId];
-        if (count <= 0) continue; // skip zero
-        payload.push({ group_id: groupId, user_id: userId, messages: count });
-      }
-    }
-
-    if (!payload.length) return;
-
-    // Send to backend
-    await axios.post(
-      "https://kiroflix.site/backend/save_message_stats.php",
-      { stats: payload }
-    );
-
-    console.log(`📊 Pushed ${payload.length} stats to backend`);
-
-    // Reset local counters after sending
-    for (const groupId in messageStats) {
-      for (const userId in messageStats[groupId].users) {
-        messageStats[groupId].users[userId] = 0;
-      }
-      messageStats[groupId].total = 0;
-    }
-
-  } catch (err) {
-    console.error("❌ Failed to push message stats:", err.message);
-  }
-}
-async function fetchMessageStats() {
-
-  try {
-
-    const res = await axios.get(
-      "https://kiroflix.site/backend/get_message_stats.php"
-    );
-
-    if (!res.data.success) return;
-
-    for (const row of res.data.data) {
-
-      const { group_id, user_id, messages } = row;
-
-      if (!messageStats[group_id]) {
-        messageStats[group_id] = {
-          total: 0,
-          users: {}
-        };
-      }
-
-      messageStats[group_id].users[user_id] = messages;
-
-      messageStats[group_id].total =
-Object.values(messageStats[group_id].users)
-.reduce((a,b)=>a+b,0);
-    }
-
-    console.log("📊 Message stats loaded");
-
-  } catch (err) {
-
-    console.error("❌ Failed to load message stats:", err.message);
-
-  }
-}
 const goodbyeCache = {}; // groupId -> message template
 const pendingFarewellConfirm = {}; // groupId -> { user }
 async function fetchFarewellMessages() {
@@ -4688,8 +4736,8 @@ async function fetchWaifus(groupId) {
   }
 }
 const rankCache = {};
-async function fetchRanks(){
 
+async function fetchRanks(){
 try{
 
 const res = await axios.get(
@@ -4697,6 +4745,8 @@ const res = await axios.get(
 );
 
 if(!res.data.success) return;
+
+Object.keys(rankCache).forEach(k=>delete rankCache[k]);
 
 res.data.data.forEach(r=>{
 
@@ -4712,28 +4762,45 @@ console.log("🏅 Ranks loaded");
 }catch(e){
 console.log("Ranks load failed");
 }
-
 }
-function resolveRank(groupId, position, points) {
+function resolveRank(groupId, position, points){
+
   const ranks = rankCache[groupId];
-  if (!ranks || !ranks.length) return null;
 
-  // Check position-based rank first
-  for (const r of ranks) {
-    if (r.rank_type === "position" && r.position === Number(position)) {
-      return r.rank_name;
-    }
+  if(!ranks){
+    console.log("⚠️ No rankCache for group");
+    return null;
   }
 
-  // Fallback to points-based rank
+
+  const posRank = ranks.find(r =>
+    r.rank_type === "position" &&
+    Number(r.position) === Number(position)
+  );
+
+  if(posRank){
+    return posRank.rank_name;
+  }
+
   let best = null;
-  for (const r of ranks) {
-    if (r.rank_type === "points" && points >= r.min_points) {
-      if (!best || r.min_points > best.min_points) best = r;
+
+  for(const r of ranks){
+
+    if(r.rank_type === "points" && points >= r.min_points){
+
+
+      if(!best || r.min_points > best.min_points)
+        best = r;
     }
   }
 
-  return best ? best.rank_name : null;
+  if(best){
+    return best.rank_name;
+  }
+
+  console.log("⚠️ No rank matched");
+
+  return null;
 }
 async function getUserRank(groupId, userId){
 
@@ -5279,8 +5346,8 @@ Messages: ${JSON.stringify(chunkData.messages)}
   }
 }
 const AUTH_DIR = path.join(__dirname, "auth");
-const BACKUP_URL = "https://kiroflix.cu.ma/bot/upload_auth.php";
-const RESTORE_URL = "https://kiroflix.cu.ma/bot/fetch_auth1.php";
+const BACKUP_URL = "http://kiroflix.cu.ma/bot/upload_auth.php";
+const RESTORE_URL = "http://kiroflix.cu.ma/bot/fetch_auth1.php";
 
 async function backupAuthFolder() {
   if (!fs.existsSync(AUTH_DIR)) return;
@@ -5342,9 +5409,16 @@ async function getPlatformProfile(whatsappId) {
   }
 }
 async function startBot() {
-  // ✅ Only backup if it's a fresh session (QR scanned)
-  await backupAuthFolder();
-  
+  // Try restore auth if folder missing
+  if (!fs.existsSync(AUTH_DIR)) {
+  console.log("🔄 No local auth folder, attempting restore...");
+  const restored = await restoreAuthFolder();
+
+  if (!restored) {
+    console.log("❗ QR scan required to initialize new session");
+    isFreshSession = true; // ✅ mark as fresh session
+  }
+}
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
 
@@ -5359,16 +5433,6 @@ async function startBot() {
 
   // 🟢 Connection events
   sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
-    // Try restore auth if folder missing
-  if (!fs.existsSync(AUTH_DIR)) {
-  console.log("🔄 No local auth folder, attempting restore...");
-  const restored = await restoreAuthFolder();
-
-  if (!restored) {
-    console.log("❗ QR scan required to initialize new session");
-    isFreshSession = true; // ✅ mark as fresh session
-  }
-}
     if (qr) {
       qrCodeDataURL = await qrcode.toDataURL(qr);
       console.log("📲 QR code updated. Scan from your browser!");
@@ -5378,7 +5442,13 @@ async function startBot() {
       const { backupAuthToGithub } = require("./githubBackup");
       console.log("✅ WhatsApp connected");
       qrCodeDataURL = null; // clear QR
-      
+      // ✅ Only backup if it's a fresh session (QR scanned)
+  if (isFreshSession) {
+    await backupAuthFolder();
+    isFreshSession = false; // reset after backup
+  } else {
+    console.log("⏩ Skipping backup (existing session)");
+  }
        //await backupAuthToGithub(); // 👈 BACKUP SESSION
        await logAdminGroupIds(sock); // ⛔ blocks until finished
       fetchMessagesChunksAndProcess(sock);
@@ -5439,7 +5509,7 @@ setInterval(async () => {
     if (activeGames[groupId]) continue;
 
     if (groupCommandsCache[groupId]?.bot === "off") continue;
-    if (groupCommandsCache[groupId]?.autogames !== "on") continue;
+    if (groupCommandsCache[groupId]?.games !== "on") continue;
     
 
     console.log("🎮 Starting game in", groupId);
@@ -5723,10 +5793,6 @@ if (["remove", "leave"].includes(update.action)) {
     const from = msg.key.remoteJid;
     const isGroup = from.endsWith("@g.us");
     const userId = msg.key.participant || msg.key.remoteJid;
-    // =========================
-// 🔗 ACCOUNT LINK COMMAND
-// =========================
-
     if (isGroup) {
   try {
     await handleGroupProtection(sock, msg);
@@ -5741,7 +5807,6 @@ if (["remove", "leave"].includes(update.action)) {
 
   groupActivity[from] = Date.now();
 
-  logMessageStat(from, userId);
 }
     if (isGroup && isUserBanned(from, userId)) {
 
@@ -5764,48 +5829,6 @@ if (["remove", "leave"].includes(update.action)) {
       "";
     if (!text) return;
     text = text.trim();
-    if (!isGroup && text.toLowerCase().startsWith(".linkaccount")) {
-
-  const args = text.split(" ");
-  const token = args[1];
-
-  if (!token) {
-    await sock.sendMessage(from, {
-      text: "❌ Usage:\n.linkaccount <your_token>\n\nGet your token from Kiroflix settings https://kiroflix.cu.ma/settings/."
-    });
-    return;
-  }
-
-  try {
-
-    const res = await axios.post(
-      "http://kiroflix.cu.ma/api/bot_sync.php",
-      {
-        token: token,
-        whatsapp_id: userId // ex: 2126xxxx@s.whatsapp.net
-      }
-    );
-
-    if (res.data.success) {
-      await sock.sendMessage(from, {
-        text: "✅ Your Kiroflix account has been successfully linked to this WhatsApp!"
-      });
-    } else {
-      await sock.sendMessage(from, {
-        text: "❌ Invalid or expired token."
-      });
-    }
-
-  } catch (err) {
-    console.error("Link error:", err.message);
-
-    await sock.sendMessage(from, {
-      text: "❌ Failed to connect to Kiroflix. Try again later."
-    });
-  }
-
-  return;
-}
      // update last activity time
 
 if (isGroup && text.toLowerCase().startsWith(".salutation edit")) {
@@ -5935,30 +5958,6 @@ You are always welcome back!`
 
   return;
 }
-// -------------------- Guess Character Listener --------------------
-if (isGroup && guessCharacterGames[from]) {
-  const game = guessCharacterGames[from];
-  const round = game.rounds[game.currentRound];
-  const user = msg.key.participant || msg.key.remoteJid;
-
-  if (!round) return;
-
-  const guessText = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-  if (!guessText || guessText.length > 60) return;
-
-  // Store answer
-  game.userReplies[user] = guessText;
-
-  // If first correct answer, reveal round
-  if (!game.correctAnswered && normalizeText(guessText).includes(normalizeText(round.answer))) {
-    game.correctAnswered = true;
-
-    if (game.timer) clearTimeout(game.timer);
-
-    // Show round results
-    setTimeout(() => revealCharacterRound(sock, from), 1000);
-  }
-}
     // ---------------------- Guess Anime Listener ----------------------
 if (isGroup && guessAnimeGames[from]) {
   const game = guessAnimeGames[from];
@@ -5983,16 +5982,42 @@ if (isGroup && guessAnimeGames[from]) {
     setTimeout(() => revealRoundAnswer(sock, from), 1000);
   }
 }
+// -------------------- Guess Character Listener --------------------
+if (isGroup && guessCharacterGames[from]) {
+  const game = guessCharacterGames[from];
+  const round = game.rounds[game.currentRound];
+  const user = msg.key.participant || msg.key.remoteJid;
+
+  if (!round) return;
+
+  const guessText = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+  if (!guessText || guessText.length > 60) return;
+
+  // Store answer
+  game.userReplies[user] = guessText;
+
+  // If first correct answer, reveal round
+  if (!game.correctAnswered && normalizeText(guessText).includes(normalizeText(round.answer))) {
+    game.correctAnswered = true;
+
+    if (game.timer) clearTimeout(game.timer);
+
+    // Show round results
+    setTimeout(() => revealCharacterRound(sock, from), 1000);
+  }
+}
     
    
 const lower = text.trim().toLowerCase();
-    // -------------------- COMMAND CHECK BEFORE HANDLER --------------------
-if (isGroup) {
 
-  // Extract command directly from message
+// -------------------- COMMAND CHECK BEFORE HANDLER --------------------
+
+if (isGroup && text.startsWith(".")) {
+
+  // Extract command name
   const cmd = text.split(" ")[0].toLowerCase();
 
-  // List of commands that are not available yet
+  // Commands not available yet
   const upcomingCommands = [
     ".mute",
     ".reset",
@@ -6000,19 +6025,23 @@ if (isGroup) {
   ];
 
   if (upcomingCommands.includes(cmd)) {
-    // Check if user is admin
+
     const participant = msg.key.participant || from;
     const groupAdmins = await getGroupAdmins(sock, from);
     const isAdmin = groupAdmins.includes(participant);
 
     if (isAdmin) {
-      await sock.sendMessage(from, {
-        text: `⚠️ The command *${cmd}* isn't available yet.\nNext updates will add it!`,
-        mentions: [participant]
+
+      await sock.sendMessage(from,{
+        text:`⚠️ The command *${cmd}* isn't available yet.\nNext updates will add it!`,
+        mentions:[participant]
       });
-      return; // stop further processing
+
+      return;
     }
+
   }
+
 }
    // 🎮 Check if group game is running
 // 🎮 Check if group game is running
@@ -6111,60 +6140,6 @@ ${type} Wallpaper`
 
   return;
 }
-if (isGroup && text.toLowerCase().startsWith(".")) {
-  const parts = text.trim().split(" ");
-  const cmd = parts[0].slice(1).toLowerCase(); // removes dot
-  const sub = parts[1]?.toLowerCase() || "";
-
-  if (sub === "explain") {
-    // valid .command explain
-    const commandData = toggledCommands[cmd] || nonToggledCommands[cmd];
-    if (!commandData) {
-      await sock.sendMessage(from, {
-        text: `❌ ".${cmd}" is not a valid command.`
-      });
-      return;
-    }
-
-    // Build explanation
-    const response = 
-`📘 *Command Info*
-
-🔹 Command: .${cmd}
-📂 Category: ${commandData.category || "OTHER"}
-📝 ${commandData.description || "No description available."}
-⚙️ Usage: ${commandData.usage || "N/A"}
-${commandData.adminOnly ? "👑 Admin only" : ""}
-${commandData.adminPromote ? "⚡ Requires promotion" : ""}`;
-
-    await sock.sendMessage(from, { text: response });
-    return;
-  }
-}
-if (isGroup && text === ".settings") {
-
-  const metadata = await sock.groupMetadata(from);
-
-  const adminIds = metadata.participants
-    .filter(p => p.admin === "admin" || p.admin === "superadmin")
-    .map(p => p.id);
-
-  if (!adminIds.includes(msg.key.participant || from)) return;
-
-  const cache = groupCommandsCache[from] || {};
-
-  let msgText = `⚙️ *Group Settings*\n\n`;
-
-  for (const cmd in toggledCommands) {
-
-    let status = cache[cmd] || "on";
-
-    msgText += `• .${cmd} → ${status === "on" ? "✅ ON" : "❌ OFF"}\n`;
-  }
-
-  await sock.sendMessage(from, { text: msgText });
-  return;
-}
     // ✅ Group menu command restricted to admins
 // -------------------- MESSAGE HANDLER --------------------
 if (isGroup) {
@@ -6216,11 +6191,11 @@ if (isGroup && msg.message?.imageMessage) {
 
   const caption = msg.message.imageMessage.caption || "";
 
-  if (!caption.toLowerCase().startsWith(" .sticker")) return;
+  if (!caption.toLowerCase().startsWith(".makesticker")) return;
 
   const sender = msg.key.participant || msg.key.remoteJid;
 
-  if (groupCommandsCache[from]?.stickers === "off") {
+  if (groupCommandsCache[from]?.stickersmaker === "off") {
     await sock.sendMessage(from, {
       text: "❌ Stickers feature is disabled in this group."
     });
@@ -6281,46 +6256,95 @@ if (isGroup && msg.message?.imageMessage) {
     return; // ✅ STOP MESSAGE FLOW AFTER ERROR
   }
 }
-if (lower === " .leaderboard") {
+// ============================
+// LEADERBOARD
+// ============================
 
-  const leaderboard = await getLeaderboard(from);
+if (lower === ".leaderboard") {
+  console.log(`📊 Leaderboard requested by ${msg.sender} in group ${from}`);
 
-  if (!leaderboard.length) {
-    await sock.sendMessage(from,{ text:"🏆 No scores yet." });
+  let leaderboard;
+  try {
+    leaderboard = await getLeaderboard(from);
+    console.log("✅ Leaderboard fetched:", leaderboard);
+  } catch (err) {
+    console.error("❌ Error fetching leaderboard:", err);
+    await sock.sendMessage(from, { text: "❌ Failed to fetch leaderboard." });
     return;
   }
 
-  let msg = "🏆 *GROUP LEADERBOARD*\n\n";
+  if (!leaderboard || leaderboard.length === 0) {
+    await sock.sendMessage(from, { text: "🏆 No scores yet." });
+    console.log("⚠️ No leaderboard data returned");
+    return;
+  }
+
+  // Filter out invalid users and group IDs
+  const validLeaderboard = leaderboard.filter(u => {
+    if (!u.user_id || !u.user_id.includes("@")) {
+      console.log("⚠️ Skipping invalid user:", u);
+      return false;
+    }
+    if (u.user_id.endsWith("@g.us")) {
+      console.log("⚠️ Skipping group ID:", u.user_id);
+      return false;
+    }
+    return true;
+  });
+
+  if (validLeaderboard.length === 0) {
+    await sock.sendMessage(from, { text: "⚠️ No valid users in leaderboard." });
+    console.log("⚠️ No valid users left after filtering");
+    return;
+  }
+
+  let msgText = "🏆 *GROUP LEADERBOARD*\n\n";
   const mentions = [];
 
-  leaderboard.forEach((u,i)=>{
-
-    const rank = resolveRank(from,i+1,u.score);
+  validLeaderboard.forEach((u, i) => {
+    const rank = resolveRank(from, i + 1, Number(u.score || 0));
 
     const medal =
-      i===0 ? "🥇" :
-      i===1 ? "🥈" :
-      i===2 ? "🥉" : "🔹";
+      i === 0 ? "🥇" :
+      i === 1 ? "🥈" :
+      i === 2 ? "🥉" : "🔹";
 
-    const name = `@${u.user_id.split("@")[0]}`;
+    const username = u.user_id.split("@")[0];
 
     mentions.push(u.user_id);
 
-    msg += `${medal} ${i+1}. ${name}
+    msgText += `${medal} ${i + 1}. @${username}
 💎 Points: ${u.score}
 🏅 Rank: ${rank || "Unranked"}
 
 `;
+
+    console.log(`👤 Processing user:`, u);
+    console.log(`🏆 Resolved rank:`, rank || "Unranked");
   });
 
-  await sock.sendMessage(from,{
-    text:msg,
-    mentions
-  });
+  console.log("📝 Final message:\n", msgText);
+  console.log("📌 Mentions:", mentions);
 
-  return;
+  try {
+    const sentMsg = await sock.sendMessage(from, {
+      text: msgText,
+      mentions
+    });
+
+    console.log("✅ Message sent successfully");
+    console.log("📨 Message ID:", sentMsg.key.id);
+  } catch (err) {
+    console.error("❌ Failed to send leaderboard message:", err);
+  }
 }
-if (text.startsWith(" .rank add")) {
+
+
+// ============================
+// ADD RANK
+// ============================
+
+if (text.startsWith(".rank add")) {
 
   const sender = msg.key.participant || msg.key.remoteJid;
   const admins = await getGroupAdmins(sock, from);
@@ -6334,7 +6358,7 @@ if (text.startsWith(" .rank add")) {
 
   if (!match) {
     await sock.sendMessage(from,{
-      text:"❌ Invalid format.\n .rank add {{Rank Name}} <position|points> <value>"
+      text:"❌ Format:\n.rank add {{Rank Name}} <position|points> <value>"
     });
     return;
   }
@@ -6348,7 +6372,7 @@ if (text.startsWith(" .rank add")) {
     {
       group_id: from,
       rank_name: name,
-      rank_type: type === "position" ? "position" : "points",
+      rank_type: type,
       position: type === "position" ? value : null,
       min_points: type === "points" ? value : null,
       creator_id: sender
@@ -6357,69 +6381,72 @@ if (text.startsWith(" .rank add")) {
 
   if (res.data.success) {
 
-    if (!rankCache[from]) rankCache[from] = [];
+    await fetchRanks();
 
-    rankCache[from].push({
-      group_id: from,
-      rank_name: name,
-      rank_type: type === "position" ? "position" : "points",
-      position: type === "position" ? value : null,
-      min_points: type === "points" ? value : null,
-      creator_id: sender
+    await sock.sendMessage(from,{
+      text:`✅ Rank added: ${name}`
     });
-
-    await sock.sendMessage(from,{ text:`✅ Rank added: ${name}` });
 
   } else {
 
     await sock.sendMessage(from,{
-      text:`❌ Failed to add rank: ${res.data.error || "Unknown error"}`
+      text:`❌ Failed: ${res.data.error || "Unknown error"}`
     });
 
   }
 
   return;
 }
-if (text.startsWith(" .rank delete")) {
 
-  const match = text.match(/{{(.+?)}}/);
 
-  if (!match) {
+
+// ============================
+// DELETE RANK (BY ID)
+// ============================
+
+if (text.startsWith(".rank delete")) {
+
+  const parts = text.split(" ");
+  const id = parseInt(parts[2]);
+
+  if (!id) {
     await sock.sendMessage(from,{
-      text:"❌ Invalid format.\n .rank delete {{Rank Name}}"
+      text:"❌ Usage:\n.rank delete <rank_id>"
     });
     return;
   }
 
-  const name = match[1].trim();
-
   const res = await axios.post(
     "https://kiroflix.site/backend/delete_rank.php",
-    {
-      group_id: from,
-      rank_name: name
-    }
+    { id }
   );
 
   if (res.data.success) {
 
-    if (rankCache[from]) {
-      rankCache[from] = rankCache[from].filter(r => r.rank_name !== name);
-    }
+    await fetchRanks();
 
-    await sock.sendMessage(from,{ text:`❌ Rank deleted: ${name}` });
+    await sock.sendMessage(from,{
+      text:`🗑 Rank deleted (ID ${id})`
+    });
 
   } else {
 
     await sock.sendMessage(from,{
-      text:`❌ Failed to delete rank: ${res.data.error || "Unknown error"}`
+      text:`❌ Failed: ${res.data.error || "Unknown error"}`
     });
 
   }
 
   return;
 }
-if (text === " .ranklist") {
+
+
+
+// ============================
+// RANK LIST
+// ============================
+
+if (text === ".ranklist") {
 
   const ranks = rankCache[from] || [];
 
@@ -6432,11 +6459,13 @@ if (text === " .ranklist") {
 
   ranks.forEach(r => {
 
-    if (r.rank_type === "position")
-      msg += `🥇 Position ${r.position} → ${r.rank_name}\n`;
+    if (r.rank_type === "position") {
+      msg += `🆔 ${r.id} | 🥇 Position ${r.position} → ${r.rank_name}\n`;
+    }
 
-    if (r.rank_type === "points")
-      msg += `💎 ${r.min_points}+ points → ${r.rank_name}\n`;
+    if (r.rank_type === "points") {
+      msg += `🆔 ${r.id} | 💎 ${r.min_points}+ points → ${r.rank_name}\n`;
+    }
 
   });
 
@@ -6450,6 +6479,7 @@ if (isGroup && text.toLowerCase().startsWith(".profile")) {
     ? msg.mentionedJid[0]
     : msg.key.participant || msg.key.remoteJid;
 
+  // Fetch metadata first (needed for owner detection)
   let metadata;
   try {
     metadata = await sock.groupMetadata(from);
@@ -6465,9 +6495,29 @@ if (isGroup && text.toLowerCase().startsWith(".profile")) {
   const isSuperAdmin = mentionedUser === ownerId;
   const isUltimateOwnerOn = groupCommandsCache[from]?.ultimateowner === "on";
 
-  const profileData = await getUserProfile(from, mentionedUser);
-  const rankData = await getUserRank(from, mentionedUser);
-  const platformProfile = await getPlatformProfile(mentionedUser);
+  // ===============================
+  // 🚀 RUN API CALLS IN PARALLEL
+  // ===============================
+  let profileData, rankData, platformProfile;
+
+  try {
+
+    [profileData, rankData, platformProfile] = await Promise.all([
+      getUserProfile(from, mentionedUser),
+      getUserRank(from, mentionedUser),
+      getPlatformProfile(mentionedUser)
+    ]);
+
+  } catch (err) {
+
+    console.log("❌ Parallel fetch error:", err);
+
+    await sock.sendMessage(from,{
+      text:"❌ Failed to fetch profile."
+    },{quoted:msg});
+
+    return;
+  }
 
   if (!profileData || !rankData) {
     await sock.sendMessage(from,{
@@ -6498,11 +6548,12 @@ if (isGroup && text.toLowerCase().startsWith(".profile")) {
   }
 
   // ===============================
-  // 🌐 PLATFORM SECTION (BEFORE RANK)
+  // 🌐 PLATFORM SECTION
   // ===============================
   let platformSection = "";
 
   if (platformProfile.linked) {
+
     const p = platformProfile.data;
 
     platformSection =
@@ -6514,7 +6565,9 @@ if (isGroup && text.toLowerCase().startsWith(".profile")) {
 🎬 Total Ratings: ${p.ratings.length}
 
 `;
+
   } else {
+
     platformSection =
 `🌐 *Kiroflix Profile*
 
@@ -6524,6 +6577,7 @@ https://kiroflix.cu.ma/settings/
 Use your token via DM: .linkaccount YOUR_TOKEN
 
 `;
+
   }
 
   // ===============================
@@ -6537,13 +6591,18 @@ Use your token via DM: .linkaccount YOUR_TOKEN
   let progressBar = "";
 
   if (isUltimateOwnerOn && isSuperAdmin) {
+
     position = "♾️";
     points = "∞";
     rankName = "👑 Ultimate Owner";
     progressText = "🚀 Highest authority level";
+
   } else {
+
     const nextRank = getNextRank(from, points);
+
     if(nextRank){
+
       const need = nextRank.min_points - points;
       const percent = Math.floor((points / nextRank.min_points) * 100);
       const filled = Math.floor(percent / 10);
@@ -6554,13 +6613,17 @@ Use your token via DM: .linkaccount YOUR_TOKEN
 `📈 Next Rank: ${nextRank.rank_name}
 ${progressBar} ${percent}%
 Need: ${need} points`;
+
     } else {
+
       progressText = "🏆 You reached the highest rank!";
+
     }
+
   }
 
   // ===============================
-  // 🎨 FINAL MESSAGE
+  // FINAL MESSAGE
   // ===============================
   const message =
 `🏅 *Profile Card*
@@ -6582,6 +6645,8 @@ ${progressText}`;
     text: message,
     mentions:[mentionedUser]
   },{quoted:msg});
+return;
+
 
 }
  // 💖 WAIFU CLAIM
@@ -6646,56 +6711,6 @@ if (isGroup && text.toLowerCase().startsWith(".ban")) {
   await handleBanCommand(sock, msg, text);
   return; // Stop further processing after handling .ban
 }
-// -------------------- KICK COMMAND --------------------
-if (isGroup && text.toLowerCase().startsWith(".kick ")) {
-  const sender = msg.key.participant || msg.key.remoteJid;
-
-  // 1️⃣ Only admins can use
-  const admins = await getGroupAdmins(sock, from);
-  if (!admins.includes(sender)) {
-    await sock.sendMessage(from, {
-      text: "❌ Only group admins can use this command.",
-      mentions: [sender]
-    });
-    return;
-  }
-
-  // 2️⃣ Extract mentioned user(s)
-  const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
-  if (mentions.length === 0) {
-    await sock.sendMessage(from, {
-      text: "❌ You must mention a user to kick. Example:\n/kiroflix .kick @user",
-      mentions: [sender]
-    });
-    return;
-  }
-
-  // 3️⃣ Attempt to kick each mentioned user
-  for (const userId of mentions) {
-    try {
-      // Attempt kick
-      await sock.groupParticipantsUpdate(from, [userId], "remove");
-
-      // Find participant name if available, otherwise fallback to ID
-      const metadata = await sock.groupMetadata(from);
-
-const userName =
-metadata.participants?.find(p => p.id === userId)?.name ||
-userId.split("@")[0];
-
-      // ✅ Success message
-      await sock.sendMessage(from, { text: `🚫 ${userName} has been kicked from the group.` });
-    } catch (err) {
-      // Only send this if the bot truly cannot kick (bot is not admin, or user is admin)
-      console.error(`Kick error for ${userId}:`, err);
-
-      await sock.sendMessage(from, {
-        text: `⚠️ Cannot remove ${userId.split("@")[0]}. Make sure the bot is an admin!`
-      });
-    }
-  }
-  return;
-}
 // -------------------- UNBAN COMMAND --------------------
 if (isGroup && text.toLowerCase().startsWith(".unban")) {
   const sender = msg.key.participant || msg.key.remoteJid;
@@ -6749,6 +6764,56 @@ if (isGroup && text.toLowerCase().startsWith(".unban")) {
     }
   }
 
+  return;
+}
+// -------------------- KICK COMMAND --------------------
+if (isGroup && text.toLowerCase().startsWith(".kick ")) {
+  const sender = msg.key.participant || msg.key.remoteJid;
+
+  // 1️⃣ Only admins can use
+  const admins = await getGroupAdmins(sock, from);
+  if (!admins.includes(sender)) {
+    await sock.sendMessage(from, {
+      text: "❌ Only group admins can use this command.",
+      mentions: [sender]
+    });
+    return;
+  }
+
+  // 2️⃣ Extract mentioned user(s)
+  const mentions = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+  if (mentions.length === 0) {
+    await sock.sendMessage(from, {
+      text: "❌ You must mention a user to kick. Example:\n .kick @user",
+      mentions: [sender]
+    });
+    return;
+  }
+
+  // 3️⃣ Attempt to kick each mentioned user
+  for (const userId of mentions) {
+    try {
+      // Attempt kick
+      await sock.groupParticipantsUpdate(from, [userId], "remove");
+
+      // Find participant name if available, otherwise fallback to ID
+      const metadata = await sock.groupMetadata(from);
+
+const userName =
+metadata.participants?.find(p => p.id === userId)?.name ||
+userId.split("@")[0];
+
+      // ✅ Success message
+      await sock.sendMessage(from, { text: `🚫 ${userName} has been kicked from the group.` });
+    } catch (err) {
+      // Only send this if the bot truly cannot kick (bot is not admin, or user is admin)
+      console.error(`Kick error for ${userId}:`, err);
+
+      await sock.sendMessage(from, {
+        text: `⚠️ Cannot remove ${userId.split("@")[0]}. Make sure the bot is an admin!`
+      });
+    }
+  }
   return;
 }
     // ✅ Group commands
@@ -6964,15 +7029,6 @@ Rules:
   // ⚠️ Stop further processing after sending confirmation
   return;
 }
-if (isGroup && text.toLowerCase() === ".guesscharacter") {
-  if (activeGames[from] || guessCharacterGames[from]) {
-    await sock.sendMessage(from, { text: "⚠️ A game is already running." });
-    return;
-  }
-
-  await sock.sendMessage(from, { text: "🎮 Starting Guess The Character..." });
-  startGuessCharacterGame(sock, from);
-}
       if (isGroup && text.toLowerCase() === ".guessanime") {
 
 if (activeGames[from] || guessAnimeGames[from]) {
@@ -6992,6 +7048,17 @@ text:"🎮 Starting Guess The Anime..."
 startGuessAnimeGame(sock,from);
 
 return;
+
+}
+if (isGroup && text.toLowerCase() === ".guesscharacter") {
+  if (activeGames[from] || guessCharacterGames[from]) {
+    await sock.sendMessage(from, { text: "⚠️ A game is already running." });
+    return;
+  }
+
+  await sock.sendMessage(from, { text: "🎮 Starting Guess The Character..." });
+  startGuessCharacterGame(sock, from);
+  return;
 
 }
       // 🎮 Manual quiz start by admin
@@ -7080,6 +7147,60 @@ if (isGroup && text.toLowerCase() === ".quiz stop") {
 
   await endGame(sock, from);
 
+  return;
+}
+if (isGroup && text.toLowerCase().startsWith(".")) {
+  const parts = text.trim().split(" ");
+  const cmd = parts[0].slice(1).toLowerCase(); // removes dot
+  const sub = parts[1]?.toLowerCase() || "";
+
+  if (sub === "explain") {
+    // valid .command explain
+    const commandData = toggledCommands[cmd] || nonToggledCommands[cmd];
+    if (!commandData) {
+      await sock.sendMessage(from, {
+        text: `❌ ".${cmd}" is not a valid command.`
+      });
+      return;
+    }
+
+    // Build explanation
+    const response = 
+`📘 *Command Info*
+
+🔹 Command: .${cmd}
+📂 Category: ${commandData.category || "OTHER"}
+📝 ${commandData.description || "No description available."}
+⚙️ Usage: ${commandData.usage || "N/A"}
+${commandData.adminOnly ? "👑 Admin only" : ""}
+${commandData.adminPromote ? "⚡ Requires promotion" : ""}`;
+
+    await sock.sendMessage(from, { text: response });
+    return;
+  }
+}
+if (isGroup && text === ".settings") {
+
+  const metadata = await sock.groupMetadata(from);
+
+  const adminIds = metadata.participants
+    .filter(p => p.admin === "admin" || p.admin === "superadmin")
+    .map(p => p.id);
+
+  if (!adminIds.includes(msg.key.participant || from)) return;
+
+  const cache = groupCommandsCache[from] || {};
+
+  let msgText = `⚙️ *Group Settings*\n\n`;
+
+  for (const cmd in toggledCommands) {
+
+    let status = cache[cmd] || "on";
+
+    msgText += `• .${cmd} → ${status === "on" ? "✅ ON" : "❌ OFF"}\n`;
+  }
+
+  await sock.sendMessage(from, { text: msgText });
   return;
 }
 // -------------------- GROUP NOTEPAD --------------------
@@ -7192,7 +7313,12 @@ if (isGroup && text.toLowerCase().startsWith(".note")) {
     await sock.sendMessage(from, { text: "⚠️ Error managing group notes." });
   }
 }
-      
+      if (text.length > MAX_MESSAGE_LENGTH) {
+        await sock.sendMessage(from, {
+          text: "⚠️ Request too long.\nExample:\n.animewatch Naruto episode 5"
+        });
+        return;
+      }
       
     } else {
       // ✅ Private chat max length
@@ -7202,6 +7328,48 @@ if (isGroup && text.toLowerCase().startsWith(".note")) {
         });
         return;
       }
+    }
+    if (!isGroup && text.toLowerCase().startsWith(".linkaccount")) {
+    
+      const args = text.split(" ");
+      const token = args[1];
+    
+      if (!token) {
+        await sock.sendMessage(from, {
+          text: "❌ Usage:\n.linkaccount <your_token>\n\nGet your token from Kiroflix settings https://kiroflix.cu.ma/settings/."
+        });
+        return;
+      }
+    
+      try {
+    
+        const res = await axios.post(
+          "http:/.cu.ma/api/bot_sync.php",
+          {
+            token: token,
+            whatsapp_id: userId // ex: 2126xxxx@s.whatsapp.net
+          }
+        );
+    
+        if (res.data.success) {
+          await sock.sendMessage(from, {
+            text: "✅ Your Kiroflix account has been successfully linked to this WhatsApp!"
+          });
+        } else {
+          await sock.sendMessage(from, {
+            text: "❌ Invalid or expired token."
+          });
+        }
+    
+      } catch (err) {
+        console.error("Link error:", err.message);
+    
+        await sock.sendMessage(from, {
+          text: "❌ Failed to connect to Kiroflix. Try again later."
+        });
+      }
+    
+      return;
     }
    
 
