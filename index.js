@@ -3637,23 +3637,26 @@ async function checkImageNSFW(imageBuffer) {
     const base64 = imageBuffer.toString("base64");
 
     const prompt = `
-You are a safety moderation AI.
+You are an image moderation AI.
 
-Analyze the image and classify it into ONE category:
+STRICT RULES:
+- ONLY analyze VISUAL content (bodies, poses, exposed parts)
+- IGNORE any text, captions, subtitles, or dialogue in the image
+- DO NOT infer meaning from words
+- DO NOT guess or assume context
 
-SAFE
-NUDITY
-SEXUAL
-EXPLICIT
+Classify ONLY based on visible body parts:
 
-Then give a short explanation.
+SAFE = no nudity or sexual body parts
+NUDITY = visible private body parts
+SEXUAL = suggestive poses or focus on sexual areas
+EXPLICIT = sexual acts
 
-Return EXACTLY in this format:
+Return EXACTLY:
 
 CATEGORY: <SAFE|NUDITY|SEXUAL|EXPLICIT>
-REASON: <short explanation why>
+REASON: <only describe visible body evidence>
 `;
-
     const { data } = await axios.post(
       `${GEMINI_VISION_URL}?key=${GEMINI_KEY}`,
       {
