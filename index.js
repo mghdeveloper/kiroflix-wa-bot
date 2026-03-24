@@ -28,7 +28,7 @@ const processedEpisodes = new Set();
 let qrCodeDataURL = null; // store latest QR code
 let schedulerStarted = false;
 let sockInstance = null; // store global socket
-
+let qrScanned = false;
 // Maximum message length allowed for processing
 const MAX_MESSAGE_LENGTH = 300; // or whatever limit you prefer
 app.get("/", async (_, res) => {
@@ -579,7 +579,7 @@ function logError(context, err) {
 async function buildContext(userJid, currentText, maxRecent = 5) {
   try {
     const { data } = await axios.post(
-      "https:/.site/backend/get_last_messages.php",
+      "https://kiroflix.site/backend/get_last_messages.php",
       { user_jid: userJid }
     );
 
@@ -810,7 +810,7 @@ async function searchAnime(title) {
     logStep("SEARCH TITLE", title);
 
     const { data } = await axios.get(
-      "https:/.site/backend/anime_search_v1.php",
+      "https://kiroflix.site/backend/anime_search_v1.php",
       { params: { q: title } }
     );
 
@@ -5349,35 +5349,78 @@ const AUTH_DIR = path.join(__dirname, "auth");
 const BACKUP_URL = "http://kiroflix.cu.ma/bot/upload_auth.php";
 const RESTORE_URL = "http://kiroflix.cu.ma/bot/fetch_auth1.php";
 
+const BACKUP_ENABLED = process.env.BACKUP_ENABLED === "true";
+
+let isFreshSession = false;
+let backupTimeout = null;
+let isBackingUp = false;
+
+// ================= BACKUP =================
 async function backupAuthFolder() {
-  if (!fs.existsSync(AUTH_DIR)) return;
-  const zip = new AdmZip();
-  zip.addLocalFolder(AUTH_DIR);
-  const buffer = zip.toBuffer();
+  if (!fs.existsSync(AUTH_DIR)) return false;
+
+  if (isBackingUp) {
+    console.log("⏳ Backup already in progress, skipping...");
+    return false;
+  }
+
+  isBackingUp = true;
 
   try {
-    await axios.post(BACKUP_URL, buffer, { headers: { "Content-Type": "application/zip" } });
+    const zip = new AdmZip();
+    zip.addLocalFolder(AUTH_DIR);
+    const buffer = zip.toBuffer();
+
+    await axios.post(BACKUP_URL, buffer, {
+      headers: { "Content-Type": "application/zip" },
+      timeout: 20000
+    });
+
     console.log("✅ Auth folder backed up to backend");
+    isBackingUp = false;
+    return true;
+
   } catch (err) {
-    console.error("❌ Failed to backup auth folder:", err.message);
+    console.error("❌ Backup FAILED:", err.message);
+    isBackingUp = false;
+    return false;
   }
 }
 
+// ================= RESTORE =================
 async function restoreAuthFolder() {
   try {
-    const res = await axios.get(RESTORE_URL, { responseType: "arraybuffer" });
+    const res = await axios.get(RESTORE_URL, {
+      responseType: "arraybuffer",
+      timeout: 20000
+    });
+
     if (!res.data || res.data.byteLength === 0) throw new Error("Empty backup");
 
     const zip = new AdmZip(res.data);
     zip.extractAllTo(AUTH_DIR, true);
-    console.log("✅ Auth folder restored from backend");
+
+    console.log("✅ Auth folder restored");
     return true;
+
   } catch (err) {
-    console.warn("⚠️ Could not restore auth folder:", err.message);
+    console.warn("⚠️ Restore failed:", err.message);
     return false;
   }
 }
-let isFreshSession = false;
+
+// ================= FORCE RESET =================
+function wipeAuth() {
+  try {
+    if (fs.existsSync(AUTH_DIR)) {
+      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+      console.log("🧹 Auth folder wiped");
+    }
+  } catch (e) {
+    console.log("⚠️ Failed to wipe auth:", e.message);
+  }
+}
+
 async function getPlatformProfile(whatsappId) {
   try {
     const res = await axios.post(
@@ -5409,16 +5452,7 @@ async function getPlatformProfile(whatsappId) {
   }
 }
 async function startBot() {
-  // Try restore auth if folder missing
-  if (!fs.existsSync(AUTH_DIR)) {
-  console.log("🔄 No local auth folder, attempting restore...");
-  const restored = await restoreAuthFolder();
-
-  if (!restored) {
-    console.log("❗ QR scan required to initialize new session");
-    isFreshSession = true; // ✅ mark as fresh session
-  }
-}
+  
   const { state, saveCreds } = await useMultiFileAuthState("auth");
   const { version } = await fetchLatestBaileysVersion();
 
@@ -5434,21 +5468,73 @@ async function startBot() {
   // 🟢 Connection events
   sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
     if (qr) {
-      qrCodeDataURL = await qrcode.toDataURL(qr);
-      console.log("📲 QR code updated. Scan from your browser!");
+  qrCodeDataURL = await qrcode.toDataURL(qr);
+  console.log("📲 QR code updated. Scan from your browser!");
+
+  isFreshSession = true;
+  qrScanned = false; // reset on new QR
+
+  // ⏳ Wait 2 min BEFORE deciding (restore OR continue)
+  if (backupTimeout) clearTimeout(backupTimeout);
+
+  backupTimeout = setTimeout(async () => {
+
+    // 🛑 If user already scanned → CANCEL restore
+    if (qrScanned) {
+      console.log("⏩ QR already scanned → skipping restore");
+      return;
     }
 
+    console.log("⏳ Checking backend backup before continuing...");
+
+    const restored = await restoreAuthFolder();
+
+    if (restored) {
+      console.log("♻️ Backup found → restarting with restored session");
+
+      wipeAuth(); // remove partial auth
+      await restoreAuthFolder();
+
+      process.exit(0); // restart (Render reboot)
+      return;
+    }
+
+    console.log("⚠️ No valid backup → waiting for QR scan");
+
+  }, 2 * 60 * 1000);
+}
+
     if (connection === "open") {
-      const { backupAuthToGithub } = require("./githubBackup");
-      console.log("✅ WhatsApp connected");
-      qrCodeDataURL = null; // clear QR
-      // ✅ Only backup if it's a fresh session (QR scanned)
-  if (isFreshSession) {
-    await backupAuthFolder();
-    isFreshSession = false; // reset after backup
-  } else {
-    console.log("⏩ Skipping backup (existing session)");
+  console.log("✅ WhatsApp connected");
+
+  qrCodeDataURL = null;
+  qrScanned = true; // ✅ mark as scanned
+
+  if (backupTimeout) {
+    clearTimeout(backupTimeout); // ✅ cancel pending restore
   }
+
+  // 💾 Backup ONLY if enabled
+  if (BACKUP_ENABLED) {
+    console.log("⏳ Waiting before backup...");
+
+    setTimeout(async () => {
+      const success = await backupAuthFolder();
+
+      if (!success) {
+        console.log("❌ Backup failed → forcing new QR next time");
+        wipeAuth();
+        process.exit(1);
+      } else {
+        console.log("✅ Session backed up successfully");
+        isFreshSession = false;
+      }
+    }, 60 * 1000); // wait 1 min after connect
+  } else {
+    console.log("🚫 Backup disabled via ENV");
+  }
+
+      
        //await backupAuthToGithub(); // 👈 BACKUP SESSION
        await logAdminGroupIds(sock); // ⛔ blocks until finished
       fetchMessagesChunksAndProcess(sock);
@@ -7344,7 +7430,7 @@ if (isGroup && text.toLowerCase().startsWith(".note")) {
       try {
     
         const res = await axios.post(
-          "http:/.cu.ma/api/bot_sync.php",
+          "http://kiroflix.cu.ma/api/bot_sync.php",
           {
             token: token,
             whatsapp_id: userId // ex: 2126xxxx@s.whatsapp.net
