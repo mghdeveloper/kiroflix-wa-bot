@@ -7398,34 +7398,45 @@ if (isGroup && text.toLowerCase().startsWith(".note")) {
     }
 
     // -------------------- LIST NOTES --------------------
-    if (subCommand === "list") {
-      const res = await fetch(`${BACKEND_URL}getNotes.php?group_id=${encodeURIComponent(from)}`);
-      const data = await res.json();
+    // -------------------- LIST NOTES --------------------
+if (subCommand === "list") {
+  const res = await fetch(`${BACKEND_URL}getNotes.php?group_id=${encodeURIComponent(from)}`);
+  const data = await res.json();
 
-      if (!data.success || !data.notes.length) {
-        await sock.sendMessage(from, { text: "📝 No notes found for this group." });
-        return;
-      }
+  if (!data.success || !data.notes.length) {
+    await sock.sendMessage(from, { text: "📝 No notes found for this group." });
+    return;
+  }
 
-      let message = `📝 *Group Notepad*\n\n`;
-      for (const note of data.notes) {
-        // WhatsApp mentions
-        let mentions = [];
-        let noteText = note.text.replace(/@(\d{5,15})/g, (_, id) => {
-          const jid = id.includes("@") ? id : `${id}@s.whatsapp.net`;
-          mentions.push(jid);
-          return `@${jid.split("@")[0]}`;
-        });
+  const groupMeta = await sock.groupMetadata(from);
+  const groupName = groupMeta.subject;
 
-        message += `✦ ID: ${note.id} | ${note.date}\n${noteText}\n\n`;
+  let message = `╭───〔 📝 *${groupName} Notepad* 〕───╮\n\n`;
+  let mentions = [];
 
-        await sock.sendMessage(from, {
-          text: message,
-          mentions
-        });
-      }
-      return;
-    }
+  for (const note of data.notes) {
+
+    let noteText = note.text.replace(/@(\d{5,15})/g, (_, id) => {
+      const jid = `${id}@s.whatsapp.net`;
+      mentions.push(jid);
+      return `@${id}`;
+    });
+
+    message += `✦ *Note ID:* ${note.id}\n`;
+    message += `📅 *Date:* ${note.date}\n`;
+    message += `📝 ${noteText}\n`;
+    message += `──────────────────\n`;
+  }
+
+  message += `╰───────────────╯`;
+
+  await sock.sendMessage(from, {
+    text: message,
+    mentions
+  });
+
+  return;
+}
 
     // -------------------- DELETE NOTE --------------------
     if (subCommand === "delete") {
