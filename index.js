@@ -1021,10 +1021,11 @@ ${searchData}
 --------------------------------
 
 GOAL:
-1️⃣ Extract the title EXACTLY as the user wrote it (light cleanup only)
-2️⃣ Extract chapter number
-3️⃣ If chapter missing → 1
-4️⃣ If unclear → {"notFound": true}
+1️⃣ Extract ONLY the manhwa title
+2️⃣ REMOVE chapter indicators from title
+3️⃣ Extract chapter number
+4️⃣ If chapter missing → 1
+5️⃣ If unclear → {"notFound": true}
 
 Return ONLY JSON:
 
@@ -5410,7 +5411,8 @@ const BACKUP_ENABLED = process.env.BACKUP_ENABLED === "true";
 let isFreshSession = false;
 let backupTimeout = null;
 let isBackingUp = false;
-
+let isConnected = false;
+let restoring = false;
 // ================= BACKUP =================
 async function backupAuthFolder() {
   if (!fs.existsSync(AUTH_DIR)) return false;
@@ -5429,7 +5431,7 @@ async function backupAuthFolder() {
 
     await axios.post(BACKUP_URL, buffer, {
       headers: { "Content-Type": "application/zip" },
-      timeout: 120000
+      timeout: 20000
     });
 
     console.log("✅ Auth folder backed up to backend");
@@ -5445,23 +5447,50 @@ async function backupAuthFolder() {
 
 // ================= RESTORE =================
 async function restoreAuthFolder() {
+
+  if (restoring) {
+    console.log("⏳ Restore already running...");
+    return;
+  }
+
+  restoring = true;
+
+  console.log("🔍 Auth folder missing. Attempting restore...");
+
   try {
+
     const res = await axios.get(RESTORE_URL, {
       responseType: "arraybuffer",
-      timeout: 20000
+      timeout: 120000
     });
 
-    if (!res.data || res.data.byteLength === 0) throw new Error("Empty backup");
+    if (!res.data || res.data.byteLength === 0) {
+      console.log("⚠️ No backup found on backend");
+      restoring = false;
+      return;
+    }
+
+    console.log("📦 Backup downloaded");
+
+    wipeAuth();
 
     const zip = new AdmZip(res.data);
+
+    console.log("📂 Extracting auth folder...");
+
     zip.extractAllTo(AUTH_DIR, true);
 
-    console.log("✅ Auth folder restored");
-    return true;
+    console.log("✅ Auth restored successfully. Restarting bot...");
+
+    restoring = false;
+
+    process.exit(0);
 
   } catch (err) {
-    console.warn("⚠️ Restore failed:", err.message);
-    return false;
+
+    console.log("❌ Restore failed:", err.message);
+
+    restoring = false;
   }
 }
 
@@ -5507,6 +5536,21 @@ async function getPlatformProfile(whatsappId) {
     return { linked: false };
   }
 }
+setInterval(async () => {
+
+  // Skip if already connected
+  if (isConnected) return;
+
+  // Check if auth folder exists
+  if (!fs.existsSync(AUTH_DIR)) {
+
+    console.log("⚠️ Auth folder deleted!");
+
+    await restoreAuthFolder();
+
+  }
+
+}, 5000);
 async function startBot() {
   
   const { state, saveCreds } = await useMultiFileAuthState("auth");
@@ -5524,43 +5568,33 @@ async function startBot() {
   // 🟢 Connection events
   sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
     if (qr) {
+
+  console.log("📲 QR generated");
+
   qrCodeDataURL = await qrcode.toDataURL(qr);
-  console.log("📲 QR code updated. Scan from your browser!");
-
   isFreshSession = true;
-  qrScanned = false; // reset on new QR
+  qrScanned = false;
 
-  // ⏳ Wait 2 min BEFORE deciding (restore OR continue)
-  if (backupTimeout) clearTimeout(backupTimeout);
+  console.log("🔎 Checking backend backup BEFORE asking for QR scan");
 
-  backupTimeout = setTimeout(async () => {
+  const restored = await restoreAuthFolder();
 
-    // 🛑 If user already scanned → CANCEL restore
-    if (qrScanned) {
-      console.log("⏩ QR already scanned → skipping restore");
-      return;
-    }
+  if (restored) {
 
-    console.log("⏳ Checking backend backup before continuing...");
+    console.log("♻️ Backup found → restarting bot with restored session");
 
-    const restored = await restoreAuthFolder();
+    process.exit(0); // Render will restart
 
-    if (restored) {
-      console.log("♻️ Backup found → restarting with restored session");
+    return;
+  }
 
-      await restoreAuthFolder();
+  console.log("⚠️ No backup found → waiting for QR scan");
 
-      process.exit(0); // restart (Render reboot)
-      return;
-    }
-
-    console.log("⚠️ No valid backup → waiting for QR scan");
-
-  }, 2 * 60 * 1000);
 }
 
     if (connection === "open") {
   console.log("✅ WhatsApp connected");
+  isConnected = true;
 
   qrCodeDataURL = null;
   qrScanned = true; // ✅ mark as scanned
@@ -5578,7 +5612,6 @@ async function startBot() {
 
       if (!success) {
         console.log("❌ Backup failed → forcing new QR next time");
-        wipeAuth();
         process.exit(1);
       } else {
         console.log("✅ Session backed up successfully");
@@ -5663,6 +5696,7 @@ setInterval(async () => {
     }
 
     if (connection === "close") {
+      isConnected = false;
       const shouldReconnect =
         lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
       if (shouldReconnect) startBot();
@@ -7465,12 +7499,7 @@ if (subCommand === "list") {
     await sock.sendMessage(from, { text: "⚠️ Error managing group notes." });
   }
 }
-      if (text.length > MAX_MESSAGE_LENGTH) {
-        await sock.sendMessage(from, {
-          text: "⚠️ Request too long.\nExample:\n.animewatch Naruto episode 5"
-        });
-        return;
-      }
+      
       
     } else {
       // ✅ Private chat max length
