@@ -5551,6 +5551,44 @@ setInterval(async () => {
   }
 
 }, 5000);
+async function ensureAuthFolder() {
+
+  if (fs.existsSync(AUTH_DIR)) {
+    console.log("✅ Auth folder exists");
+    return;
+  }
+
+  console.log("⚠️ Auth folder missing. Checking backend backup...");
+
+  try {
+
+    const res = await axios.get(RESTORE_URL, {
+      responseType: "arraybuffer",
+      timeout: 120000
+    });
+
+    if (!res.data || res.data.byteLength === 0) {
+      console.log("⚠️ No backup found on backend");
+      return;
+    }
+
+    console.log("📦 Backup downloaded");
+
+    const zip = new AdmZip(res.data);
+
+    console.log("📂 Extracting backup...");
+
+    zip.extractAllTo(AUTH_DIR, true);
+
+    console.log("✅ Auth restored before bot start");
+
+  } catch (err) {
+
+    console.log("❌ Restore failed:", err.message);
+
+  }
+
+}
 async function startBot() {
   
   const { state, saveCreds } = await useMultiFileAuthState("auth");
@@ -5568,30 +5606,9 @@ async function startBot() {
   // 🟢 Connection events
   sock.ev.on("connection.update", async ({ connection, qr, lastDisconnect }) => {
     if (qr) {
-
   console.log("📲 QR generated");
-
   qrCodeDataURL = await qrcode.toDataURL(qr);
-  isFreshSession = true;
-  qrScanned = false;
-
-  console.log("🔎 Checking backend backup BEFORE asking for QR scan");
-
-  const restored = await restoreAuthFolder();
-
-  if (restored) {
-
-    console.log("♻️ Backup found → restarting bot with restored session");
-
-    process.exit(0); // Render will restart
-
-    return;
-  }
-
-  console.log("⚠️ No backup found → waiting for QR scan");
-
 }
-
     if (connection === "open") {
   console.log("✅ WhatsApp connected");
   isConnected = true;
@@ -7566,4 +7583,10 @@ if (subCommand === "list") {
   console.log("🤖 Kiroflix Bot is running...");
 }
 
-startBot();
+(async () => {
+
+  await ensureAuthFolder();
+
+  startBot();
+
+})();
