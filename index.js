@@ -4761,18 +4761,13 @@ function containsBadWord(groupId, text) {
 
   const msg = text
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g,""); // remove symbols
+    .replace(/[^a-z0-9\s]/g, " ") // keep spaces clean
+    .replace(/\s+/g, " ")         // normalize spaces
+    .trim();
 
-  return words.some(w => {
+  const msgWords = msg.split(" ");
 
-    const word = w.toLowerCase().trim();
-
-    const regex = new RegExp(`\\b${word}\\b`, "i");
-
-    return regex.test(msg);
-
-  });
-
+  return msgWords.some(w => words.includes(w));
 }
 
 // Fetch waifus from backend for a group
