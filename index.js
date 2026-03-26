@@ -7223,35 +7223,87 @@ Rules:
 }
       if (isGroup && text.toLowerCase() === ".guessanime") {
 
-if (activeGames[from] || guessAnimeGames[from]) {
+  const user = msg.key.participant || msg.key.remoteJid;
 
-await sock.sendMessage(from,{
-text:"⚠️ A game is already running."
-});
+  const admins = await getGroupAdmins(sock, from);
+  const isAdmin = admins.includes(user);
 
-return;
-
-}
-
-await sock.sendMessage(from,{
-text:"🎮 Starting Guess The Anime..."
-});
-
-startGuessAnimeGame(sock,from);
-
-return;
-
-}
-if (isGroup && text.toLowerCase() === ".guesscharacter") {
-  if (activeGames[from] || guessCharacterGames[from]) {
-    await sock.sendMessage(from, { text: "⚠️ A game is already running." });
+  if (!isAdmin) {
+    await sock.sendMessage(from,{
+      text:"❌ Only group admins can start Guess The Anime."
+    });
     return;
   }
 
-  await sock.sendMessage(from, { text: "🎮 Starting Guess The Character..." });
+  if (groupCommandsCache[from]?.bot === "off") {
+    await sock.sendMessage(from,{
+      text:"❌ Bot is disabled in this group."
+    });
+    return;
+  }
+
+  if (groupCommandsCache[from]?.games !== "on") {
+    await sock.sendMessage(from,{
+      text:"❌ Games are disabled in this group."
+    });
+    return;
+  }
+
+  if (activeGames[from] || guessAnimeGames[from]) {
+    await sock.sendMessage(from,{
+      text:"⚠️ A game is already running."
+    });
+    return;
+  }
+
+  await sock.sendMessage(from,{
+    text:"🎮 Admin started Guess The Anime!"
+  });
+
+  startGuessAnimeGame(sock, from);
+  return;
+}
+if (isGroup && text.toLowerCase() === ".guesscharacter") {
+
+  const user = msg.key.participant || msg.key.remoteJid;
+
+  const admins = await getGroupAdmins(sock, from);
+  const isAdmin = admins.includes(user);
+
+  if (!isAdmin) {
+    await sock.sendMessage(from,{
+      text:"❌ Only group admins can start Guess The Character."
+    });
+    return;
+  }
+
+  if (groupCommandsCache[from]?.bot === "off") {
+    await sock.sendMessage(from,{
+      text:"❌ Bot is disabled in this group."
+    });
+    return;
+  }
+
+  if (groupCommandsCache[from]?.games !== "on") {
+    await sock.sendMessage(from,{
+      text:"❌ Games are disabled in this group."
+    });
+    return;
+  }
+
+  if (activeGames[from] || guessCharacterGames[from]) {
+    await sock.sendMessage(from,{
+      text:"⚠️ A game is already running."
+    });
+    return;
+  }
+
+  await sock.sendMessage(from,{
+    text:"🎮 Admin started Guess The Character!"
+  });
+
   startGuessCharacterGame(sock, from);
   return;
-
 }
       // 🎮 Manual quiz start by admin
 if (isGroup && text.toLowerCase() === ".quiz start") {
