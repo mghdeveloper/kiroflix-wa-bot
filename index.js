@@ -3604,72 +3604,120 @@ async function startMatch(sock, groupId){
 // -----------------------------
 // 🃏 PLAY CARD – FULL LOGIC
 // -----------------------------
+// -----------------------------
+// 🃏 PLAY CARD – UPGRADED YU-GI-OH STYLE
+// -----------------------------
 async function play(sock, groupId, player, index, mode, targetIndex) {
-  const g = duelGames[groupId]; if(!g||player!==g.turn) return;
-  const opp = player===g.challenger ? g.opponent : g.challenger;
-  const card = g.hands[player][index]; if(!card) return;
+    const g = duelGames[groupId]; 
+    if(!g || player !== g.turn) return;
 
-  // Auto-sacrifice for high-level monsters
-  if(card.level >= 5) {
-    const required = card.level >= 8 ? 2 : 1;
-    if(g.field[player].length < required) {
-      return sock.sendMessage(player, { 
-        text: `⚠️ You need ${required} monster(s) on field to summon ${card.name} (Level ${card.level})!` 
-      });
-    }
-    g.graveyard[player].push(...g.field[player].splice(0, required));
-    await sock.sendMessage(player, {
-      text: `🗡️ Sacrificed ${required} monster(s) to summon ${card.name}!`
-    });
-  }
+    const opp = player === g.challenger ? g.opponent : g.challenger;
+    const card = g.hands[player][index]; 
+    if(!card) return;
 
-  card.mode = mode || "attack";
-  g.hands[player].splice(index,1);
-  g.field[player].push(card);
-  if(g.decks[player].length) g.hands[player].push(g.decks[player].shift());
-
-  // Attack logic
-  let target = (typeof targetIndex !== "undefined") ? g.field[opp][targetIndex] : null;
-  let damage = 0;
-  let battleText = "";
-
-  if(card.type === "monster") {
-    if(target){
-      if(card.mode === "attack"){
-        damage = card.attack - (target.mode === "attack" ? target.attack : target.defense);
-        damage = Math.max(0, damage);
-
-        let killedText = "";
-        if(damage > 0) {
-          g.graveyard[opp].push(target);
-          g.field[opp].splice(targetIndex, 1);
-          killedText = `🗡️ ${target.name} sent to graveyard!`;
+    // -----------------------------
+    // 💀 AUTO-SACRIFICE FOR HIGH LEVEL MONSTERS
+    // -----------------------------
+    if(card.level >= 5){
+        const required = card.level >= 8 ? 2 : 1; // 5-7 level: 1 tribute, 8-12: 2 tributes
+        if(g.field[player].length < required){
+            return sock.sendMessage(player, { 
+                text: `⚠️ You need ${required} monster(s) on field to summon ${card.name} (Level ${card.level})!` 
+            });
         }
-
-        battleText = `🟥 @${player.split("@")[0]} attacks 🟦 @${opp.split("@")[0]}'s ${target.name} for ${damage} damage! ${killedText}`;
-      } else {
-        battleText = `🟦 ${card.name} is in defense mode, no damage dealt`;
-      }
-    } else {
-      damage = card.attack;
-      g.hp[opp] -= damage;
-      battleText = `🟥 Direct attack by ${card.name} deals ${damage} damage!`;
+        // Sacrifice monsters
+        const sacrificed = g.field[player].splice(0, required);
+        g.graveyard[player].push(...sacrificed);
+        await sock.sendMessage(player, {
+            text: `🗡️ Sacrificed ${sacrificed.map(c=>c.name).join(", ")} to summon ${card.name}!`
+        });
     }
-    g.hp[opp] -= card.mode === "attack" ? damage : 0;
-  }
 
-  // Send battle message
-  await sock.sendMessage(groupId, {
-    text:`⚔️ ROUND ${g.round}\n${battleText}\n❤️ HP: @${g.challenger.split("@")[0]} ${g.hp[g.challenger]} - @${g.opponent.split("@")[0]} ${g.hp[g.opponent]}`,
-    mentions:[g.challenger,g.opponent]
-  });
+    // -----------------------------
+    // 🎴 SET MODE & PLACE CARD
+    // -----------------------------
+    card.mode = mode || "attack";
+    g.hands[player].splice(index,1);
+    g.field[player].push(card);
+    if(g.decks[player].length) g.hands[player].push(g.decks[player].shift());
 
-  // Check for win
-  if(g.hp[g.challenger] <= 0 || g.hp[g.opponent] <= 0) return end(sock, groupId);
+    // -----------------------------
+    // ⚔️ CALCULATE BATTLE
+    // -----------------------------
+    let target = g.field[opp][targetIndex] || null;
+    let damage = 0;
+    let battleText = "";
 
-  g.turn = opp; g.round++;
-  await sendHand(sock, g.turn, g);
-  await sock.sendMessage(groupId, { text:`➡️ Turn: @${g.turn.split("@")[0]}`, mentions:[g.turn] });
+    // Critical hit & defense boost randomness
+    const crit = Math.random() < 0.1; // 10% chance
+    const defBoost = Math.random() < 0.1; // 10% chance
+
+    if(defBoost && target) target.defense += 50;
+    if(crit) damage += 50;
+
+    if(card.type === "monster") {
+        if(target){
+            if(card.mode === "attack"){
+                damage += card.attack - (target.mode === "attack" ? target.attack : target.defense);
+                damage = Math.max(0, damage);
+
+                let killedText = "";
+                if(damage > 0){
+                    g.graveyard[opp].push(target);
+                    g.field[opp].splice(targetIndex,1);
+                    killedText = `🗡️ ${target.name} sent to graveyard!`;
+                }
+
+                if(damage > 0 && target.mode === "attack") g.hp[opp] -= damage;
+                battleText = `🟥 @${player.split("@")[0]} attacks 🟦 @${opp.split("@")[0]}'s ${target.name} for ${damage} damage! ${killedText}`;
+                if(crit) battleText += " 💥 Critical Hit!";
+                if(defBoost) battleText += " 🛡️ Opponent got defense boost!";
+            } else {
+                battleText = `🟦 ${card.name} is in defense mode, no damage dealt`;
+            }
+        } else {
+            damage = card.attack + (crit ? 50 : 0);
+            g.hp[opp] -= damage;
+            battleText = `🟥 Direct attack by ${card.name} deals ${damage} damage!`;
+            if(crit) battleText += " 💥 Critical Hit!";
+        }
+        g.hp[opp] = Math.max(0, g.hp[opp]);
+    }
+
+    // -----------------------------
+    // 🌟 ARENA & FIELD EFFECT DISPLAY
+    // -----------------------------
+    let arenaEffect = "🏟️ Arena: Standard Duel Field";
+    if(card.rarity === "legendary") arenaEffect = "🌌 Arena: Legendary Duel Realm!";
+
+    const fieldStatus = `
+🟩 ${player.split("@")[0]} Field: ${g.field[player].map(c=>c.name+"("+c.mode+")").join(", ") || "Empty"}
+🟦 ${opp.split("@")[0]} Field: ${g.field[opp].map(c=>c.name+"("+c.mode+")").join(", ") || "Empty"}
+⚰️ ${player.split("@")[0]} Graveyard: ${g.graveyard[player].map(c=>c.name).join(", ") || "Empty"}
+⚰️ ${opp.split("@")[0]} Graveyard: ${g.graveyard[opp].map(c=>c.name).join(", ") || "Empty"}
+❤️ HP: ${g.hp[player]} - ${g.hp[opp]}
+`;
+
+    // -----------------------------
+    // 🔊 SEND ROUND MESSAGE
+    // -----------------------------
+    await sock.sendMessage(groupId, {
+        text: `${arenaEffect}\n⚔️ ROUND ${g.round}\n${battleText}\n${fieldStatus}`,
+        mentions:[player, opp]
+    });
+
+    // -----------------------------
+    // 🏁 CHECK WIN
+    // -----------------------------
+    if(g.hp[player]<=0 || g.hp[opp]<=0) return end(sock, groupId);
+
+    // -----------------------------
+    // 🔄 SWITCH TURN
+    // -----------------------------
+    g.turn = opp; 
+    g.round++;
+    await sendHand(sock, g.turn, g);
+    await sock.sendMessage(groupId,{ text:`➡️ Turn: @${g.turn.split("@")[0]}`, mentions:[g.turn] });
 }
 // -----------------------------
 // 🏁 END DUEL
