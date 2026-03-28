@@ -3425,6 +3425,301 @@ async function endCharacterGame(sock, groupId) {
 
   delete guessCharacterGames[groupId];
 }
+// ===============================
+// ⚔️ YU-GI-OH STYLE DUEL SYSTEM – STYLISH
+// ===============================
+
+const duelGames = {};
+const duelCooldown = {};
+
+let cachedCharacters = [];
+let lastFetchTime = 0;
+
+// -----------------------------
+// 🧠 FETCH TRENDING CHARACTERS (JIKAN)
+// -----------------------------
+async function fetchTrendingCharacters() {
+  console.log("📡 Fetching characters from Jikan...");
+  try {
+    const pages = [1, 2];
+    let all = [];
+
+    for (const page of pages) {
+      const res = await fetch(`https://api.jikan.moe/v4/top/characters?page=${page}`);
+      const data = await res.json();
+      data.data.forEach(c => {
+        all.push({
+          name: c.name,
+          anime: c.anime?.[0]?.title || "Unknown"
+        });
+      });
+    }
+    return all;
+  } catch (e) {
+    console.log("❌ Jikan error:", e);
+    return [];
+  }
+}
+
+// -----------------------------
+// 🤖 GENERATE AI ABILITIES
+// -----------------------------
+async function generateAbilities(chars) {
+  const prompt = `
+Create Yu-Gi-Oh style abilities for anime cards.
+Return JSON array:
+[ { "type": "monster|spell|trap", "rarity": "common|rare|epic|legendary", "special": "string", "level": 1-12 } ]
+Characters:
+${chars.map(c => `${c.name} from ${c.anime}`).join("\n")}
+  `;
+  try {
+    const ai = await askAI(prompt);
+    return JSON.parse(ai.replace(/```json|```/g, "").trim());
+  } catch (e) {
+    return chars.map(() => ({
+      type: "monster",
+      rarity: "common",
+      special: "none",
+      level: 1
+    }));
+  }
+}
+
+// -----------------------------
+// 🎴 BUILD DECK
+// -----------------------------
+// -----------------------------
+// 🎴 BUILD DECK – LEVEL CONTROL
+// -----------------------------
+async function generateDeck() {
+  const chars = await fetchTrendingCharacters();
+  const shuffled = chars.sort(() => 0.5 - Math.random());
+  const selected = shuffled.slice(0, 10);
+  const abilities = await generateAbilities(selected);
+
+  const deck = selected.map((c, i) => {
+    let level = abilities[i]?.level || 1;
+
+    // Force playable levels for early cards
+    if (i < 3) level = Math.min(level, 4);          // First 3 cards: 1-4
+    else if (i < 7) level = Math.min(level, 7);     // Next 4 cards: 1-7
+    else level = Math.min(level, 12);               // Last 3 cards: 1-12
+
+    return {
+      ...c,
+      type: abilities[i]?.type || "monster",
+      rarity: abilities[i]?.rarity || "common",
+      special: abilities[i]?.special || "none",
+      level,
+      attack: 500 + Math.floor(Math.random() * 1001),   // 500-1500
+      defense: 400 + Math.floor(Math.random() * 901),   // 400-1300
+      mode: "attack" // default
+    };
+  });
+
+  // Shuffle deck after level adjustment
+  return deck.sort(() => 0.5 - Math.random());
+}
+
+// -----------------------------
+// 🃏 PLAY CARD – AUTO-SACRIFICE FOR HIGH LEVEL
+// -----------------------------
+async function play(sock, groupId, player, index, mode, targetIndex) {
+  const g = duelGames[groupId]; if(!g||player!==g.turn) return;
+  const opp = player===g.challenger ? g.opponent : g.challenger;
+  const card = g.hands[player][index]; if(!card) return;
+
+  // Auto-sacrifice if needed for level 5+
+  if(card.level >= 5) {
+    const required = card.level >= 8 ? 2 : 1; // 5-7 level: 1 tribute, 8-12 level: 2 tributes
+    if(g.field[player].length < required) {
+      return sock.sendMessage(player, { 
+        text: `⚠️ You need ${required} monster(s) on field to summon ${card.name} (Level ${card.level})!` 
+      });
+    }
+    // Sacrifice required monsters automatically
+    g.graveyard[player].push(...g.field[player].splice(0, required));
+    await sock.sendMessage(player, {
+      text: `🗡️ Sacrificed ${required} monster(s) to summon ${card.name}!`
+    });
+  }
+
+  card.mode = mode || "attack";
+  g.hands[player].splice(index, 1);
+  g.field[player].push(card);
+  if(g.decks[player].length) g.hands[player].push(g.decks[player].shift());
+
+  // Select target
+  let target = g.field[opp][targetIndex] || null;
+  let damage = 0;
+  let battleText = "";
+
+  if(card.type === "monster") {
+    if(target){
+      if(card.mode === "attack") {
+        damage = card.attack - (target.mode === "attack" ? target.attack : target.defense);
+        damage = Math.max(0, damage);
+        if(damage > 0) g.graveyard[opp].push(target), g.field[opp].splice(targetIndex, 1);
+        battleText = `🟥 @${player.split("@")[0]} attacks 🟦 @${opp.split("@")[0]}'s ${target.name} for ${damage} damage`;
+      } else {
+        battleText = `🟦 ${card.name} is in defense mode`;
+      }
+    } else {
+      damage = card.attack;
+      g.hp[opp] -= damage;
+      battleText = `🟥 Direct attack by ${card.name} deals ${damage} damage!`;
+    }
+    g.hp[opp] -= card.mode === "attack" ? damage : 0;
+  }
+
+  // Send battle message
+  await sock.sendMessage(groupId,{
+    text:`⚔️ ROUND ${g.round}\n${battleText}\n❤️ HP: @${g.challenger.split("@")[0]} ${g.hp[g.challenger]} - @${g.opponent.split("@")[0]} ${g.hp[g.opponent]}`,
+    mentions:[g.challenger,g.opponent]
+  });
+
+  // Check for win
+  if(g.hp[g.challenger] <= 0 || g.hp[g.opponent] <= 0) return end(sock, groupId);
+
+  g.turn = opp; g.round++;
+  await sendHand(sock, g.turn, g);
+  await sock.sendMessage(groupId,{ text:`➡️ Turn: @${g.turn.split("@")[0]}`, mentions:[g.turn] });
+}
+// -----------------------------
+// 🃏 CARD DISPLAY
+// -----------------------------
+function renderCard(card) {
+  const rarityEmoji = { common:"⚪", rare:"🔵", epic:"🟣", legendary:"🟡" };
+  return `
+🃏 ──────────────
+💠 ${card.name} (${card.anime})
+💎 Type: ${card.type} | Rarity: ${rarityEmoji[card.rarity] || "⚪"} | Level: ${card.level}
+✨ Ability: ${card.special} | Mode: ${card.mode}
+📊 Stats:
+❤️ ATK: ${card.attack}
+🛡 DEF: ${card.defense}
+────────────────`;
+}
+
+// -----------------------------
+// 🃏 SEND HAND
+// -----------------------------
+async function sendHand(sock, player, g) {
+  let text = "🃏 YOUR HAND:\n\n";
+  g.hands[player].forEach((c,i)=>text+=`#${i+1}${renderCard(c)}\n`);
+  await sock.sendMessage(player, { text });
+}
+
+// -----------------------------
+// 🚀 START DUEL
+// -----------------------------
+async function startDuel(sock, groupId, challenger, opponent, bet) {
+  if (duelGames[groupId]) return;
+  duelGames[groupId] = { challenger, opponent, bet, state:"wait" };
+  await sock.sendMessage(groupId,{
+    text:`⚔️ DUEL CHALLENGE!\n👤 @${challenger.split("@")[0]} vs @${opponent.split("@")[0]}\n💰 Bet: ${bet}\nType "accept" to start!`,
+    mentions:[challenger,opponent]
+  });
+}
+
+// -----------------------------
+// 🎮 START MATCH
+// -----------------------------
+async function startMatch(sock, groupId){
+  const g = duelGames[groupId];
+  g.hp = { [g.challenger]: 4000, [g.opponent]: 4000 };
+  g.turn = g.challenger;
+  g.round = 1;
+
+  g.decks = {
+    [g.challenger]: await generateDeck(),
+    [g.opponent]: await generateDeck()
+  };
+
+  g.hands = {
+    [g.challenger]: g.decks[g.challenger].splice(0,5),
+    [g.opponent]: g.decks[g.opponent].splice(0,5)
+  };
+
+  g.field = { [g.challenger]: [], [g.opponent]: [] };
+  g.graveyard = { [g.challenger]: [], [g.opponent]: [] };
+
+  await sendHand(sock,g.challenger,g);
+  await sendHand(sock,g.opponent,g);
+
+  await sock.sendMessage(groupId,{
+    text:`⚔️ MATCH STARTED!\n❤️ HP: 4000 vs 4000\n➡️ Turn: @${g.turn.split("@")[0]}`,
+    mentions:[g.turn]
+  });
+}
+
+// -----------------------------
+// 🃏 PLAY CARD – YU-GI-OH STYLE
+// -----------------------------
+async function play(sock, groupId, player, index, mode, targetIndex){
+  const g = duelGames[groupId]; if(!g||player!==g.turn) return;
+  const opp = player===g.challenger?g.opponent:g.challenger;
+  const card = g.hands[player][index]; if(!card) return;
+
+  // Check tribute
+  if(card.level>=5 && g.field[player].length<1){
+    return sock.sendMessage(player,{ text:"You need to sacrifice 1 monster to summon this level 5+ monster!" });
+  }
+
+  card.mode = mode||"attack";
+  g.hands[player].splice(index,1);
+  g.field[player].push(card);
+  if(g.decks[player].length) g.hands[player].push(g.decks[player].shift());
+
+  // Select target
+  let target = g.field[opp][targetIndex] || null;
+  let damage = 0;
+  let battleText="";
+
+  if(card.type==="monster"){
+    if(target){
+      if(card.mode==="attack"){
+        damage=card.attack-(target.mode==="attack"?target.attack:target.defense);
+        damage=Math.max(0,damage);
+        if(damage>0) g.graveyard[opp].push(target), g.field[opp].splice(targetIndex,1);
+        battleText=`🟥 @${player.split("@")[0]} attacks 🟦 @${opp.split("@")[0]}'s ${target.name} for ${damage} damage`;
+      } else battleText=`🟦 ${card.name} is in defense mode`;
+    } else{
+      damage=card.attack; g.hp[opp]-=damage;
+      battleText=`🟥 Direct attack by ${card.name} deals ${damage} damage!`;
+    }
+    g.hp[opp]-=card.mode==="attack"?damage:0;
+  }
+
+  // Send battle message
+  await sock.sendMessage(groupId,{
+    text:`⚔️ ROUND ${g.round}\n${battleText}\n❤️ HP: @${g.challenger.split("@")[0]} ${g.hp[g.challenger]} - @${g.opponent.split("@")[0]} ${g.hp[g.opponent]}`,
+    mentions:[g.challenger,g.opponent]
+  });
+
+  if(g.hp[g.challenger]<=0||g.hp[g.opponent]<=0)return end(sock,groupId);
+
+  g.turn=opp; g.round++;
+  await sendHand(sock, g.turn, g);
+  await sock.sendMessage(groupId,{ text:`➡️ Turn: @${g.turn.split("@")[0]}`, mentions:[g.turn] });
+}
+
+// -----------------------------
+// 🏁 END DUEL
+// -----------------------------
+async function end(sock, groupId){
+  const g = duelGames[groupId]; if(!g) return;
+  const p1=g.challenger, p2=g.opponent;
+  const winner=g.hp[p1]>g.hp[p2]?p1:g.hp[p2]>g.hp[p1]?p2:null;
+
+  await sock.sendMessage(groupId,{
+    text:`🏁 DUEL ENDED!\n❤️ Final HP: @${p1.split("@")[0]} ${g.hp[p1]} - @${p2.split("@")[0]} ${g.hp[p2]}\n🏆 Winner: ${winner? "@"+winner.split("@")[0]:"Draw"}\n💰 Bet: ${g.bet}`,
+    mentions:[p1,p2,winner].filter(Boolean)
+  });
+
+  if(winner) await saveScores(groupId,{ [winner]:g.bet });
+  delete duelGames[groupId];
+}
 async function saveScores(groupId, scores){
 
   try {
@@ -5547,6 +5842,7 @@ setInterval(async () => {
 
 }, 5000);
 async function ensureAuthFolder() {
+  return;
 
   if (fs.existsSync(AUTH_DIR)) {
     console.log("✅ Auth folder exists");
@@ -7387,6 +7683,60 @@ if (isGroup && text.toLowerCase() === ".quiz stop") {
   await endGame(sock, from);
 
   return;
+}
+// ===============================
+// 📩 DUEL HANDLER
+// ===============================
+
+if (isGroup) {
+  const sender = msg.key.participant || msg.key.remoteJid;
+  const textLower = text.toLowerCase();
+
+  // -----------------------------
+  // START DUEL
+  // -----------------------------
+  if (textLower.startsWith(".duel")) {
+    const parts = text.split(" ");
+    const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid;
+    if (!mentioned?.length) return;
+
+    const opponent = mentioned[0];
+    const challenger = sender;
+    const bet = parseInt(parts[2]) || 10;
+
+    if (duelCooldown[challenger] && Date.now() - duelCooldown[challenger] < 60000) {
+      return sock.sendMessage(from, { text: "⏳ Wait before starting another duel..." });
+    }
+
+    duelCooldown[challenger] = Date.now();
+    await startDuel(sock, from, challenger, opponent, bet);
+  }
+
+  // -----------------------------
+  // ACCEPT DUEL
+  // -----------------------------
+  if (duelGames[from] && textLower === "accept") {
+    const g = duelGames[from];
+    if (sender !== g.opponent) return;
+    await sock.sendMessage(from, { text: "⚔️ Duel accepted! Preparing match..." });
+    setTimeout(() => startMatch(sock, from), 1500);
+  }
+
+  // -----------------------------
+  // PLAY CARD
+  // -----------------------------
+  if (duelGames[from] && textLower.startsWith("play")) {
+  const g = duelGames[from];           // <<< define g here
+  if (!g) return;
+
+  const parts = text.split(" ");
+  const index = parseInt(parts[1]) - 1;
+  const mode = parts[2]?.toLowerCase() === "defense" ? "defense" : "attack";
+  const targetIndex = parts[3] ? parseInt(parts[3]) : undefined;
+
+  if (isNaN(index) || index < 0 || index >= g.hands[sender].length) return;
+  await play(sock, from, sender, index, mode, targetIndex);
+}
 }
 if (isGroup && text.toLowerCase().startsWith(".")) {
   const parts = text.trim().split(" ");
