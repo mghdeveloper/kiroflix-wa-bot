@@ -3491,6 +3491,8 @@ ${chars.map(c => `${c.name} from ${c.anime}`).join("\n")}
 // -----------------------------
 // 🎴 BUILD DECK – LEVEL CONTROL
 // -----------------------------
+// 🎴 BUILD DECK – LEVEL CONTROL
+// -----------------------------
 async function generateDeck() {
   const chars = await fetchTrendingCharacters();
   const shuffled = chars.sort(() => 0.5 - Math.random());
@@ -3517,12 +3519,13 @@ async function generateDeck() {
     };
   });
 
-  // Shuffle deck after level adjustment
   return deck.sort(() => 0.5 - Math.random());
 }
 
 
+// -----------------------------
 // 🃏 CARD DISPLAY
+// -----------------------------
 function renderCard(card) {
   const rarityEmoji = { common:"⚪", rare:"🔵", epic:"🟣", legendary:"🟡" };
   return `
@@ -3542,19 +3545,19 @@ function renderCard(card) {
 async function sendHand(sock, player, g) {
   const opp = player === g.challenger ? g.opponent : g.challenger;
 
-  let text = `🃏 YOUR HAND:\n\n`;
-  g.hands[player].forEach((c, i) => {
-    text += `#${i+1}${renderCard(c)}\n`;
-  });
+  let text = "🃏 YOUR HAND:\n\n";
+  g.hands[player].forEach((c,i) => text += `#${i+1}${renderCard(c)}\n`);
 
-  text += `\n🟦 OPPONENT FIELD:\n\n`;
-  if (g.field[opp].length === 0) text += "Empty\n";
-  g.field[opp].forEach((c, i) => {
+  text += "\n🟦 OPPONENT FIELD:\n\n";
+  g.field[opp].forEach((c,i) => {
     text += `#${i} ${c.name} | ATK:${c.attack} DEF:${c.defense} | Mode:${c.mode}\n`;
   });
+  if(g.field[opp].length === 0) text += "Empty\n";
 
   await sock.sendMessage(player, { text });
 }
+
+
 // -----------------------------
 // 🚀 START DUEL
 // -----------------------------
@@ -3599,22 +3602,19 @@ async function startMatch(sock, groupId){
 }
 
 // -----------------------------
-// 🃏 PLAY CARD – YU-GI-OH STYLE
+// 🃏 PLAY CARD – FULL LOGIC
 // -----------------------------
 async function play(sock, groupId, player, index, mode, targetIndex) {
-  const g = duelGames[groupId]; 
-  if (!g || player !== g.turn) return;
-
-  const opp = player === g.challenger ? g.opponent : g.challenger;
-  const card = g.hands[player][index];
-  if (!card) return;
+  const g = duelGames[groupId]; if(!g||player!==g.turn) return;
+  const opp = player===g.challenger ? g.opponent : g.challenger;
+  const card = g.hands[player][index]; if(!card) return;
 
   // Auto-sacrifice for high-level monsters
-  if (card.level >= 5) {
+  if(card.level >= 5) {
     const required = card.level >= 8 ? 2 : 1;
-    if (g.field[player].length < required) {
+    if(g.field[player].length < required) {
       return sock.sendMessage(player, { 
-        text: `⚠️ You need ${required} monster(s) on field to summon ${card.name} (Level ${card.level})!`
+        text: `⚠️ You need ${required} monster(s) on field to summon ${card.name} (Level ${card.level})!` 
       });
     }
     g.graveyard[player].push(...g.field[player].splice(0, required));
@@ -3624,25 +3624,23 @@ async function play(sock, groupId, player, index, mode, targetIndex) {
   }
 
   card.mode = mode || "attack";
-  g.hands[player].splice(index, 1);
+  g.hands[player].splice(index,1);
   g.field[player].push(card);
+  if(g.decks[player].length) g.hands[player].push(g.decks[player].shift());
 
-  // Draw new card if deck has one
-  if (g.decks[player].length) g.hands[player].push(g.decks[player].shift());
-
-  // Determine target
-  let target = targetIndex !== undefined ? g.field[opp][targetIndex] : null;
+  // Attack logic
+  let target = (typeof targetIndex !== "undefined") ? g.field[opp][targetIndex] : null;
   let damage = 0;
   let battleText = "";
 
-  if (card.type === "monster") {
-    if (target) {
-      if (card.mode === "attack") {
+  if(card.type === "monster") {
+    if(target){
+      if(card.mode === "attack"){
         damage = card.attack - (target.mode === "attack" ? target.attack : target.defense);
         damage = Math.max(0, damage);
 
         let killedText = "";
-        if (damage > 0) {
+        if(damage > 0) {
           g.graveyard[opp].push(target);
           g.field[opp].splice(targetIndex, 1);
           killedText = `🗡️ ${target.name} sent to graveyard!`;
@@ -3650,51 +3648,28 @@ async function play(sock, groupId, player, index, mode, targetIndex) {
 
         battleText = `🟥 @${player.split("@")[0]} attacks 🟦 @${opp.split("@")[0]}'s ${target.name} for ${damage} damage! ${killedText}`;
       } else {
-        battleText = `🟦 ${target.name} is in defense mode, no damage dealt`;
+        battleText = `🟦 ${card.name} is in defense mode, no damage dealt`;
       }
     } else {
-      // Direct attack
       damage = card.attack;
       g.hp[opp] -= damage;
       battleText = `🟥 Direct attack by ${card.name} deals ${damage} damage!`;
     }
-  }
-
-  // Apply HP damage if attacking
-  if (card.mode === "attack" && (!target || (target && target.mode !== "defense"))) {
-    g.hp[opp] -= damage;
+    g.hp[opp] -= card.mode === "attack" ? damage : 0;
   }
 
   // Send battle message
   await sock.sendMessage(groupId, {
-    text: `⚔️ ROUND ${g.round}\n${battleText}\n❤️ HP: @${g.challenger.split("@")[0]} ${g.hp[g.challenger]} - @${g.opponent.split("@")[0]} ${g.hp[g.opponent]}`,
-    mentions: [g.challenger, g.opponent]
+    text:`⚔️ ROUND ${g.round}\n${battleText}\n❤️ HP: @${g.challenger.split("@")[0]} ${g.hp[g.challenger]} - @${g.opponent.split("@")[0]} ${g.hp[g.opponent]}`,
+    mentions:[g.challenger,g.opponent]
   });
 
-  // Check win
-  if (g.hp[g.challenger] <= 0 || g.hp[g.opponent] <= 0) return end(sock, groupId);
+  // Check for win
+  if(g.hp[g.challenger] <= 0 || g.hp[g.opponent] <= 0) return end(sock, groupId);
 
-  // Next turn
-  g.turn = opp; 
-  g.round++;
+  g.turn = opp; g.round++;
   await sendHand(sock, g.turn, g);
-  await sock.sendMessage(groupId, { text: `➡️ Turn: @${g.turn.split("@")[0]}`, mentions: [g.turn] });
-}
-async function handlePlayCommand(sock, from, text) {
-  const g = duelGames[from];
-  if (!g) return;
-
-  const textLower = text.toLowerCase();
-  if (!textLower.startsWith("play")) return;
-
-  const parts = text.split(" ");
-  const handIndex = parseInt(parts[1]) - 1;
-  const mode = parts[2]?.toLowerCase() === "defense" ? "defense" : "attack";
-  const targetIndex = parts[3] ? parseInt(parts[3]) : undefined;
-
-  if (isNaN(handIndex) || handIndex < 0 || handIndex >= g.hands[from].length) return;
-
-  await play(sock, from, from, handIndex, mode, targetIndex);
+  await sock.sendMessage(groupId, { text:`➡️ Turn: @${g.turn.split("@")[0]}`, mentions:[g.turn] });
 }
 // -----------------------------
 // 🏁 END DUEL
@@ -7716,8 +7691,19 @@ if (isGroup) {
   // -----------------------------
   // PLAY CARD
   // -----------------------------
-  await handlePlayCommand(sock, from, text);
-  }
+  if (duelGames[from] && textLower.startsWith("play")) {
+  const g = duelGames[from];           // <<< define g here
+  if (!g) return;
+
+  const parts = text.split(" ");
+  const index = parseInt(parts[1]) - 1;
+  const mode = parts[2]?.toLowerCase() === "defense" ? "defense" : "attack";
+  const targetIndex = parts[3] ? parseInt(parts[3]) : undefined;
+
+  if (isNaN(index) || index < 0 || index >= g.hands[sender].length) return;
+  await play(sock, from, sender, index, mode, targetIndex);
+}
+}
 if (isGroup && text.toLowerCase().startsWith(".")) {
   const parts = text.trim().split(" ");
   const cmd = parts[0].slice(1).toLowerCase(); // removes dot
