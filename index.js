@@ -7717,6 +7717,7 @@ if (isGroup) {
   // PLAY CARD
   // -----------------------------
   await handlePlayCommand(sock, from, text);
+  }
 if (isGroup && text.toLowerCase().startsWith(".")) {
   const parts = text.trim().split(" ");
   const cmd = parts[0].slice(1).toLowerCase(); // removes dot
