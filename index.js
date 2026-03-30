@@ -45,6 +45,9 @@ process.on("unhandledRejection", err => {
   if (err?.message?.includes("Bad MAC")) return;
   console.error("Unhandled Rejection:", err);
 });
+if (!fs.existsSync("./cards")) {
+  fs.mkdirSync("./cards");
+}
 app.get("/", async (_, res) => {
   // If bot is logged in, just show a message
   if (!qrCodeDataURL) {
@@ -312,7 +315,7 @@ adminPromote:false
 slowmode:{
 category:"GROUP",
 description:"Add delay between messages to reduce spam.",
-usage:".slowmode 10s",
+usage:".slowmode on/off",
 adminOnly:true,
 adminPromote:false
 },
@@ -386,14 +389,14 @@ getwallpaper:{
 guessanime:{
 category:"FUN",
 description:"Start a fun anime guessing game where players try to identify anime from hints, images, or clues provided by the bot.",
-usage:".guessanime start",
+usage:".guessanime start / .guessanime stop",
 adminOnly:false,
 adminPromote:false
 },
 guesscharacter: {
   category: "FUN",
   description: "Guess the anime character from a blurred image. 5 rounds per game. Players earn points by replying with the correct character name.",
-  usage: ".guesscharacter start",
+  usage: ".guesscharacter start / .guesscharacter stop",
   adminOnly: false,
   adminPromote: false
 },
@@ -571,7 +574,109 @@ unban:{
     usage:".note add <note content> → adds a new note\n.note list → displays all saved notes\n.note remove <note number or ID> → deletes a specific note",
     adminOnly:false,
     adminPromote:false
-  }
+  },
+  translate: {
+  category: "AI",
+  description: "Translate a message a user replies to using AI. Limited to 3 translations per minute per user.",
+  usage: "Reply to a message → .translate <target language>",
+  adminOnly: false,
+  adminPromote: false
+},
+
+assistant: {
+  category: "AI",
+  description: "Chat with the AI assistant for help, explanations, or recommendations. Ask anything and the bot replies using AI.",
+  usage: "Send a normal message or .assistant <your prompt>",
+  adminOnly: false,
+  adminPromote: false
+},
+online: {
+  category: "CORE",
+  description: "Check if the bot is active/responsive.",
+  usage: ".online",
+  adminOnly: false,
+  adminPromote: false
+},
+
+ping: {
+  category: "CORE",
+  description: "Returns 'pong' with latency to show the bot is working.",
+  usage: ".ping",
+  adminOnly: false,
+  adminPromote: false
+},
+
+roll: {
+  category: "FUN",
+  description: "Roll a dice (1–6) or random number for fun.",
+  usage: ".roll",
+  adminOnly: false,
+  adminPromote: false
+},
+
+flip: {
+  category: "FUN",
+  description: "Flip a coin (heads/tails).",
+  usage: ".flip",
+  adminOnly: false,
+  adminPromote: false
+},
+
+joke: {
+  category: "FUN",
+  description: "Get a random short anime/meme style joke using AI.",
+  usage: ".joke",
+  adminOnly: false,
+  adminPromote: false
+},
+
+quote: {
+  category: "FUN",
+  description: "Get a motivational anime quote using AI.",
+  usage: ".quote",
+  adminOnly: false,
+  adminPromote: false
+},
+
+translate: {
+  category: "AI",
+  description: "Translate a message the user replies to using AI. Limited to 3 translations per minute per user.",
+  usage: "Reply to a message → .translate <target language>",
+  adminOnly: false,
+  adminPromote: false
+},
+
+tagall: {
+  category: "GROUP",
+  description: "Mention all members of the group at once.",
+  usage: ".tagall",
+  adminOnly: true,
+  adminPromote: true
+},
+
+about: {
+  category: "CORE",
+  description: "Get a brief description of the bot, its purpose, and current version.",
+  usage: ".about",
+  adminOnly: false,
+  adminPromote: false
+},
+
+rules: {
+  category: "GROUP",
+  description: "Shows the bot usage rules and basic guidelines for group members. Respect rules: no nudity, no racist groups. Bot may leave if rules are violated. You can DM the bot to submit feedback for admin review.",
+  usage: ".rules",
+  adminOnly: false,
+  adminPromote: false
+},
+
+admins: {
+  category: "GROUP",
+  description: "Lists all admins in the group.",
+  usage: ".admins",
+  adminOnly: false,
+  adminPromote: false
+}
 
 };
 // -------------------- LOCAL CACHE --------------------
@@ -3458,9 +3563,10 @@ async function fetchTrendingCharacters() {
       const data = await res.json();
       data.data.forEach(c => {
         all.push({
-          name: c.name,
-          anime: c.anime?.[0]?.title || "Unknown"
-        });
+  name: c.name,
+  anime: c.anime?.[0]?.title || "Unknown",
+  image: c.images?.jpg?.image_url || null
+});
       });
     }
     return all;
@@ -3475,25 +3581,55 @@ async function fetchTrendingCharacters() {
 // -----------------------------
 async function generateAbilities(chars) {
   const prompt = `
-Create Yu-Gi-Oh style abilities for anime cards.
-Return JSON array:
-[ { "type": "monster|spell|trap", "rarity": "common|rare|epic|legendary", "special": "string", "level": 1-12 } ]
-Characters:
-${chars.map(c => `${c.name} from ${c.anime}`).join("\n")}
-  `;
+You are generating Yu-Gi-Oh style cards for anime characters.
+⚠️ Important: All cards must be balanced and playable.
+
+Rules:
+1️⃣ Card types: "monster", "spell", "trap".
+2️⃣ Rarity: "common", "rare", "epic", "legendary".
+3️⃣ Levels: 1-12, correlating with power.
+4️⃣ Attack and Defense ranges by rarity:
+   - Common: ATK 500-800, DEF 400-700
+   - Rare: ATK 800-1200, DEF 700-1000
+   - Epic: ATK 1200-1600, DEF 900-1300
+   - Legendary: ATK 1600-2000, DEF 1200-1500
+5️⃣ Attributes: "Fire", "Water", "Wind", "Earth", "Light", "Dark".
+6️⃣ Card Types: "Dragon", "Warrior", "Spellcaster", "Beast", "Zombie", etc.
+7️⃣ Effects: Must be descriptive, but do not exceed normal damage limits.
+8️⃣ Passive abilities: Optional, can slightly boost ATK/DEF or provide minor effects.
+9️⃣ Flavor text: Fun lore or description.
+🔟 Avoid generating overpowered cards (no 4000+ ATK or 1900+ DEF).
+
+Output JSON array of cards for the following characters:
+
+[
+${chars.map(c => `{"name":"${c.name}","anime":"${c.anime}"}`).join(",\n")}
+]
+
+Return only valid JSON.
+`;
+
   try {
     const ai = await askAI(prompt);
+    // Clean any code blocks and parse JSON
     return JSON.parse(ai.replace(/```json|```/g, "").trim());
   } catch (e) {
+    console.error("Failed to generate abilities:", e.message);
+    // fallback: safe default
     return chars.map(() => ({
       type: "monster",
       rarity: "common",
-      special: "none",
-      level: 1
+      level: 1,
+      effect: "None",
+      attribute: "Light",
+      cardType: "Warrior",
+      flavorText: "",
+      passiveAbilities: "",
+      attackBoost: 500,
+      defenseBoost: 400
     }));
   }
 }
-
 // -----------------------------
 // 🎴 BUILD DECK
 // -----------------------------
@@ -3508,65 +3644,152 @@ async function generateDeck() {
   const selected = shuffled.slice(0, 10);
   const abilities = await generateAbilities(selected);
 
-  const deck = selected.map((c, i) => {
-    let level = abilities[i]?.level || 1;
+  let bossUsed = false;
 
-    // Force playable levels for early cards
-    if (i < 3) level = Math.min(level, 4);          // First 3 cards: 1-4
-    else if (i < 7) level = Math.min(level, 7);     // Next 4 cards: 1-7
-    else level = Math.min(level, 12);               // Last 3 cards: 1-12
+  return selected.map((c, i) => {
+    let rarity = abilities[i]?.rarity || "common";
+
+    // 🔥 Only ONE legendary allowed
+    if (rarity === "legendary") {
+      if (bossUsed) rarity = "epic";
+      else bossUsed = true;
+    }
+
+    const level = Math.min(abilities[i]?.level || 1, 12);
 
     return {
       ...c,
       type: abilities[i]?.type || "monster",
-      rarity: abilities[i]?.rarity || "common",
-      special: abilities[i]?.special || "none",
+      rarity,
       level,
-      attack: 500 + Math.floor(Math.random() * 1001),   // 500-1500
-      defense: 400 + Math.floor(Math.random() * 901),   // 400-1300
-      mode: "attack" // default
+      effect: abilities[i]?.effect || "None",
+      attribute: abilities[i]?.attribute || "Light",
+      cardType: abilities[i]?.cardType || "Warrior",
+      flavorText: abilities[i]?.flavorText || "",
+      passiveAbilities: abilities[i]?.passiveAbilities || "",
+      attack: (abilities[i]?.attackBoost || 0) + 500 + Math.floor(Math.random()*500),
+      defense: (abilities[i]?.defenseBoost || 0) + 400 + Math.floor(Math.random()*400),
+      mode: "attack",
+      hidden: false, // 🔥 for traps/spells
+      ready: false   // 🔥 for spells delay
     };
   });
-
-  return deck.sort(() => 0.5 - Math.random());
 }
 
+const delay = ms => new Promise(r => setTimeout(r, ms));
 
-// -----------------------------
-// 🃏 CARD DISPLAY
-// -----------------------------
-function renderCard(card) {
-  const rarityEmoji = { common:"⚪", rare:"🔵", epic:"🟣", legendary:"🟡" };
-  return `
-🃏 ──────────────
-💠 ${card.name} (${card.anime})
-💎 Type: ${card.type} | Rarity: ${rarityEmoji[card.rarity] || "⚪"} | Level: ${card.level}
-✨ Ability: ${card.special} | Mode: ${card.mode}
-📊 Stats:
-❤️ ATK: ${card.attack}
-🛡 DEF: ${card.defense}
-────────────────`;
-}
-
-// -----------------------------
-// 🃏 SEND HAND
-// -----------------------------
 async function sendHand(sock, player, g) {
-  const opp = player === g.challenger ? g.opponent : g.challenger;
+  for (let i = 0; i < g.hands[player].length; i++) {
+    const card = g.hands[player][i];
+    const path = `./cards/${Date.now()}_${Math.floor(Math.random()*10000)}_${i}.png`;
+    
+    try {
+      await createCardImage(card, path);
+      await sock.sendMessage(player, {
+        image: fs.readFileSync(path),
+        caption: `#${i+1} 🃏 ${card.name}\nATK:${card.attack} DEF:${card.defense}`
+      });
+    } catch (e) {
+      console.error("Failed to send card", card.name, e.message);
+    } finally {
+      if (fs.existsSync(path)) fs.unlinkSync(path);
+    }
 
-  let text = "🃏 YOUR HAND:\n\n";
-  g.hands[player].forEach((c,i) => text += `#${i+1}${renderCard(c)}\n`);
-
-  text += "\n🟦 OPPONENT FIELD:\n\n";
-  g.field[opp].forEach((c,i) => {
-    text += `#${i} ${c.name} | ATK:${c.attack} DEF:${c.defense} | Mode:${c.mode}\n`;
-  });
-  if(g.field[opp].length === 0) text += "Empty\n";
-
-  await sock.sendMessage(player, { text });
+    await delay(300);
+  }
 }
 
+async function createCardImage(card, filePath) {
+  // 🎨 Rarity colors
+  const rarityColors = {
+    common: "#c0c0c0",
+    rare: "#3498db",
+    epic: "#9b59b6",
+    legendary: "#f1c40f"
+  };
+  const bg = rarityColors[card.rarity] || "#ffffff";
 
+  // 🔹 Start base image
+  const base = sharp({
+    create: {
+      width: 400,
+      height: 600,
+      channels: 3,
+      background: bg
+    }
+  });
+
+  let imageBuffer = null;
+
+  // 🔹 Fetch card image if exists
+  if (card.image) {
+    try {
+      console.log("📡 Fetching image:", card.image);
+      const res = await fetch(card.image);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const arrayBuffer = await res.arrayBuffer();
+      imageBuffer = Buffer.from(arrayBuffer);
+
+      console.log("✅ Image fetched, size:", imageBuffer.length);
+    } catch (e) {
+      console.error("❌ Image fetch failed for", card.name, e.message);
+      imageBuffer = null; // fallback to blank
+    }
+  } else {
+    console.log("⚠️ No image URL for", card.name);
+  }
+
+  // 🔹 Compose image
+  const composites = [];
+
+  if (imageBuffer) {
+    composites.push({
+      input: imageBuffer,
+      top: 60,
+      left: 20,
+      // scale image to fit nicely (optional)
+      blend: "over"
+    });
+  }
+
+  // 🔹 Add text overlay for card name, level, ATK/DEF
+  const svgText = `
+<svg width="400" height="600">
+  <style>
+    .name { font-size: 24px; font-weight: bold; fill: #000; font-family: sans-serif; }
+    .stats { font-size: 18px; fill: #000; font-family: sans-serif; }
+    .level { font-size: 20px; font-weight: bold; fill: #000; font-family: sans-serif; }
+    .effect { font-size: 14px; fill: #000; font-family: sans-serif; }
+    .flavor { font-size: 12px; font-style: italic; fill: #333; font-family: sans-serif; }
+  </style>
+
+  <!-- Header -->
+  <text x="20" y="30" class="name">${card.name}</text>
+  <text x="340" y="30" class="level">Lv:${card.level}</text>
+  <text x="20" y="50" class="stats">${card.attribute} / ${card.cardType}</text>
+  <text x="20" y="580" class="stats">ATK:${card.attack} DEF:${card.defense}</text>
+
+  <!-- Card Effect -->
+  <text x="20" y="500" class="effect">Effect: ${card.effect}</text>
+
+  <!-- Passive Abilities -->
+  <text x="20" y="520" class="effect">Passive: ${card.passiveAbilities}</text>
+
+  <!-- Flavor Text -->
+  <text x="20" y="540" class="flavor">${card.flavorText}</text>
+</svg>
+`;
+  composites.push({ input: Buffer.from(svgText), top: 0, left: 0 });
+
+  // 🔹 Render and save
+  await base
+    .composite(composites)
+    .png()
+    .toFile(filePath);
+
+  console.log("🃏 Card image saved:", filePath);
+}
 // -----------------------------
 // 🚀 START DUEL
 // -----------------------------
@@ -3584,9 +3807,14 @@ async function startDuel(sock, groupId, challenger, opponent, bet) {
 // -----------------------------
 async function startMatch(sock, groupId){
   const g = duelGames[groupId];
+  g.phase = "draw"; // draw, main, battle, end
+
   g.hp = { [g.challenger]: 4000, [g.opponent]: 4000 };
   g.turn = g.challenger;
   g.round = 1;
+
+  g.energy = { [g.challenger]: 3, [g.opponent]: 3 }; // 🔥 NEW
+  g.summonedThisTurn = {};
 
   g.decks = {
     [g.challenger]: await generateDeck(),
@@ -3605,9 +3833,61 @@ async function startMatch(sock, groupId){
   await sendHand(sock,g.opponent,g);
 
   await sock.sendMessage(groupId,{
-    text:`⚔️ MATCH STARTED!\n❤️ HP: 4000 vs 4000\n➡️ Turn: @${g.turn.split("@")[0]}`,
+    text:`⚔️ MATCH STARTED!\n❤️ HP: 4000 vs 4000\n⚡ Energy: 3\n➡️ Turn: @${g.turn.split("@")[0]}`,
     mentions:[g.turn]
   });
+}
+async function nextPhase(sock, groupId){
+  const g = duelGames[groupId];
+  if(!g) return;
+
+  const phases = ["draw","main","battle","end"];
+  let idx = phases.indexOf(g.phase);
+  g.phase = phases[(idx + 1) % phases.length];
+  g.actionUsed = false;
+
+  // DRAW PHASE
+  if(g.phase === "draw"){
+    if(g.decks[g.turn].length){
+      g.hands[g.turn].push(g.decks[g.turn].shift());
+    }
+  }
+
+  // END TURN → switch player
+  if(g.phase === "end"){
+    const opp = g.turn === g.challenger ? g.opponent : g.challenger;
+    g.turn = opp;
+    g.energy[opp] += 2;
+    g.summonedThisTurn[g.turn] = false;
+    g.phase = "draw";
+    g.round++;
+  }
+
+  await sock.sendMessage(groupId,{
+    text:`🔄 Phase: ${g.phase.toUpperCase()}\n➡️ Turn: @${g.turn.split("@")[0]}`,
+    mentions:[g.turn]
+  });
+}
+function applyEffect(card, g, player, opp){
+  if(!card.effect) return;
+
+  if(card.effect.includes("heal")){
+    g.hp[player] += 300;
+  }
+
+  if(card.effect.includes("burn")){
+    g.hp[opp] -= 200;
+  }
+
+  if(card.effect.includes("boost")){
+    card.attack += 150;
+  }
+
+  if(card.effect.includes("draw")){
+    if(g.decks[player].length){
+      g.hands[player].push(g.decks[player].shift());
+    }
+  }
 }
 
 // -----------------------------
@@ -3616,117 +3896,212 @@ async function startMatch(sock, groupId){
 // -----------------------------
 // 🃏 PLAY CARD – UPGRADED YU-GI-OH STYLE
 // -----------------------------
-async function play(sock, groupId, player, index, mode, targetIndex) {
-    const g = duelGames[groupId]; 
-    if(!g || player !== g.turn) return;
+async function play(sock, groupId, player, index, mode="attack", targetIndex=null){
+  const g = duelGames[groupId];
+  if(!g || player !== g.turn) return;
 
-    const opp = player === g.challenger ? g.opponent : g.challenger;
-    const card = g.hands[player][index]; 
-    if(!card) return;
+  const opp = player === g.challenger ? g.opponent : g.challenger;
 
-    // -----------------------------
-    // 💀 AUTO-SACRIFICE FOR HIGH LEVEL MONSTERS
-    // -----------------------------
-    if(card.level >= 5){
-        const required = card.level >= 8 ? 2 : 1; // 5-7 level: 1 tribute, 8-12: 2 tributes
-        if(g.field[player].length < required){
-            return sock.sendMessage(player, { 
-                text: `⚠️ You need ${required} monster(s) on field to summon ${card.name} (Level ${card.level})!` 
-            });
-        }
-        // Sacrifice monsters
-        const sacrificed = g.field[player].splice(0, required);
-        g.graveyard[player].push(...sacrificed);
-        await sock.sendMessage(player, {
-            text: `🗡️ Sacrificed ${sacrificed.map(c=>c.name).join(", ")} to summon ${card.name}!`
-        });
-    }
-
-    // -----------------------------
-    // 🎴 SET MODE & PLACE CARD
-    // -----------------------------
-    card.mode = mode || "attack";
-    g.hands[player].splice(index,1);
-    g.field[player].push(card);
-    if(g.decks[player].length) g.hands[player].push(g.decks[player].shift());
-
-    // -----------------------------
-    // ⚔️ CALCULATE BATTLE
-    // -----------------------------
-    let target = g.field[opp][targetIndex] || null;
-    let damage = 0;
-    let battleText = "";
-
-    // Critical hit & defense boost randomness
-    const crit = Math.random() < 0.1; // 10% chance
-    const defBoost = Math.random() < 0.1; // 10% chance
-
-    if(defBoost && target) target.defense += 50;
-    if(crit) damage += 50;
-
-    if(card.type === "monster") {
-        if(target){
-            if(card.mode === "attack"){
-                damage += card.attack - (target.mode === "attack" ? target.attack : target.defense);
-                damage = Math.max(0, damage);
-
-                let killedText = "";
-                if(damage > 0){
-                    g.graveyard[opp].push(target);
-                    g.field[opp].splice(targetIndex,1);
-                    killedText = `🗡️ ${target.name} sent to graveyard!`;
-                }
-
-                if(damage > 0 && target.mode === "attack") g.hp[opp] -= damage;
-                battleText = `🟥 @${player.split("@")[0]} attacks 🟦 @${opp.split("@")[0]}'s ${target.name} for ${damage} damage! ${killedText}`;
-                if(crit) battleText += " 💥 Critical Hit!";
-                if(defBoost) battleText += " 🛡️ Opponent got defense boost!";
-            } else {
-                battleText = `🟦 ${card.name} is in defense mode, no damage dealt`;
-            }
-        } else {
-            damage = card.attack + (crit ? 50 : 0);
-            g.hp[opp] -= damage;
-            battleText = `🟥 Direct attack by ${card.name} deals ${damage} damage!`;
-            if(crit) battleText += " 💥 Critical Hit!";
-        }
-        g.hp[opp] = Math.max(0, g.hp[opp]);
-    }
-
-    // -----------------------------
-    // 🌟 ARENA & FIELD EFFECT DISPLAY
-    // -----------------------------
-    let arenaEffect = "🏟️ Arena: Standard Duel Field";
-    if(card.rarity === "legendary") arenaEffect = "🌌 Arena: Legendary Duel Realm!";
-
-    const fieldStatus = `
-🟩 ${player.split("@")[0]} Field: ${g.field[player].map(c=>c.name+"("+c.mode+")").join(", ") || "Empty"}
-🟦 ${opp.split("@")[0]} Field: ${g.field[opp].map(c=>c.name+"("+c.mode+")").join(", ") || "Empty"}
-⚰️ ${player.split("@")[0]} Graveyard: ${g.graveyard[player].map(c=>c.name).join(", ") || "Empty"}
-⚰️ ${opp.split("@")[0]} Graveyard: ${g.graveyard[opp].map(c=>c.name).join(", ") || "Empty"}
-❤️ HP: ${g.hp[player]} - ${g.hp[opp]}
-`;
-
-    // -----------------------------
-    // 🔊 SEND ROUND MESSAGE
-    // -----------------------------
-    await sock.sendMessage(groupId, {
-        text: `${arenaEffect}\n⚔️ ROUND ${g.round}\n${battleText}\n${fieldStatus}`,
-        mentions:[player, opp]
+  // -----------------------------
+  // 🎯 PHASE CHECK
+  // -----------------------------
+  if(g.phase !== "main" && g.phase !== "battle"){
+    return sock.sendMessage(player,{ 
+      text:`⚠️ You can't play cards in ${g.phase} phase` 
     });
+  }
 
-    // -----------------------------
-    // 🏁 CHECK WIN
-    // -----------------------------
-    if(g.hp[player]<=0 || g.hp[opp]<=0) return end(sock, groupId);
+  const card = g.hands[player][index];
+  if(!card) return;
 
-    // -----------------------------
-    // 🔄 SWITCH TURN
-    // -----------------------------
-    g.turn = opp; 
-    g.round++;
-    await sendHand(sock, g.turn, g);
-    await sock.sendMessage(groupId,{ text:`➡️ Turn: @${g.turn.split("@")[0]}`, mentions:[g.turn] });
+if(g.actionUsed){
+  return sock.sendMessage(player,{ text:"⛔ Action already used this phase!" });
+}
+  // -----------------------------
+  // ⚡ ENERGY SYSTEM
+  // -----------------------------
+  const cost = card.level <=4 ? 1 : card.level <=7 ? 2 : 3;
+
+  if(g.energy[player] < cost){
+    return sock.sendMessage(player,{ 
+      text:`⚡ Not enough energy! Need ${cost}` 
+    });
+  }
+
+  g.energy[player] -= cost;
+g.actionUsed = true;
+  // -----------------------------
+  // 🚫 FIRST TURN RULE
+  // -----------------------------
+  if(g.round === 1 && player === g.challenger){
+    mode = "defense";
+  }
+
+  // -----------------------------
+  // 🧠 APPLY EFFECT
+  // -----------------------------
+  applyEffect(card, g, player, opp);
+
+  // -----------------------------
+  // 🪤 TRAP / SPELL SET (MAIN ONLY)
+  // -----------------------------
+  if(g.phase === "main"){
+    if(card.type === "trap"){
+      card.hidden = true;
+      g.field[player].push(card);
+      g.hands[player].splice(index,1);
+
+      return sock.sendMessage(groupId,{
+        text:`🪤 ${player.split("@")[0]} set a trap card!`,
+        mentions:[player]
+      });
+    }
+
+    if(card.type === "spell"){
+      card.hidden = true;
+      card.ready = false;
+      g.field[player].push(card);
+      g.hands[player].splice(index,1);
+
+      return sock.sendMessage(groupId,{
+        text:`✨ Spell set! Will activate next turn`,
+        mentions:[player]
+      });
+    }
+  }
+
+  // -----------------------------
+  // 💀 SUMMON (MAIN ONLY)
+  // -----------------------------
+  if(g.phase === "main"){
+    if(g.summonedThisTurn[player]){
+      return sock.sendMessage(player,{ text:"⚠️ Already summoned!" });
+    }
+
+    g.summonedThisTurn[player] = true;
+    card.mode = mode;
+
+    g.field[player].push(card);
+    g.hands[player].splice(index,1);
+
+    // 🔥 COMBO BONUS
+    const sameAttr = g.field[player].filter(c=>c.attribute === card.attribute);
+
+    if(sameAttr.length >= 2) card.attack += 100;
+    if(sameAttr.length >= 3){
+      card.attack += 200;
+      g.energy[player] = Math.min(g.energy[player] + 1, 10);
+    }
+
+    return sock.sendMessage(groupId,{
+      text:`🔥 ${card.name} summoned in ${mode.toUpperCase()} mode!`,
+      mentions:[player]
+    });
+  }
+
+  // -----------------------------
+  // ⚔️ BATTLE PHASE ONLY
+  // -----------------------------
+  if(g.phase !== "battle"){
+    return sock.sendMessage(player,{ text:`⚔️ You can only attack in battle phase` });
+  }
+
+  let damage = 0;
+
+  // -----------------------------
+  // 🎯 TARGET CHECK
+  // -----------------------------
+  let target = null;
+
+  if(targetIndex !== null){
+    target = g.field[opp][targetIndex];
+
+    if(!target){
+      return sock.sendMessage(player,{ text:"❌ Invalid target!" });
+    }
+  }
+
+  // -----------------------------
+  // 🪤 TRAP CHECK (ON ATTACK)
+  // -----------------------------
+  let traps = g.field[opp].filter(c => c.type==="trap" && c.hidden);
+
+  let trapMultiplier = 1;
+
+for(const trap of traps){
+  trapMultiplier *= 0.7;
+  trap.hidden = false;
+  g.graveyard[opp].push(trap);
+}
+
+g.field[opp] = g.field[opp].filter(c => !(c.type==="trap" && !c.hidden));
+
+
+  // -----------------------------
+  // ⚔️ DAMAGE CALCULATION
+  // -----------------------------
+  if(!target){
+    if(g.field[opp].length > 0){
+      return sock.sendMessage(groupId,{ text:`⚠️ Cannot attack directly!` });
+    }
+
+    damage = Math.floor(card.attack * 0.7 * trapMultiplier);
+    g.hp[opp] -= damage;
+  } else {
+    const atk = card.attack;
+    const def = target.mode === "attack" ? target.attack : target.defense;
+
+    damage = atk - def;
+
+    if(damage > 0){
+      g.graveyard[opp].push(target);
+      g.field[opp].splice(targetIndex,1);
+
+      if(target.mode === "attack"){
+        g.hp[opp] -= damage;
+      }
+    } else {
+      g.hp[player] -= Math.abs(damage);
+    }
+  }
+
+  // -----------------------------
+  // ❤️ CLAMP HP
+  // -----------------------------
+  g.hp[player] = Math.max(0, g.hp[player]);
+  g.hp[opp] = Math.max(0, g.hp[opp]);
+
+  // -----------------------------
+  // ✨ SPELL RESOLVE
+  // -----------------------------
+  g.field[player] = g.field[player].filter(c=>{
+    if(c.type === "spell"){
+      if(c.ready){
+        g.hp[player] += 200;
+        g.graveyard[player].push(c);
+        return false;
+      } else {
+        c.ready = true;
+      }
+    }
+    return true;
+  });
+
+  // -----------------------------
+  // 📢 RESULT MESSAGE
+  // -----------------------------
+  await sock.sendMessage(groupId,{
+    text:`⚔️ ${card.name} attacked!\n💥 Damage: ${damage}\n❤️ ${g.hp[player]} - ${g.hp[opp]}`,
+    mentions:[player,opp]
+  });
+
+  // -----------------------------
+  // 🏁 END CHECK
+  // -----------------------------
+  if(g.hp[player] <= 0 || g.hp[opp] <= 0){
+    return end(sock, groupId);
+  }
+  // 🔄 MOVE TO NEXT PHASE
 }
 // -----------------------------
 // 🏁 END DUEL
@@ -4032,6 +4407,37 @@ const warningCache = {};
 const floodWarnings = {};
 const mentionWarnings = {};
 const nsfwDailyLimit = {};
+const ANTILINK_LOG_FILE = path.join(__dirname, "antilink_logs.json");
+
+// Load logs
+function loadAntiLinkLogs() {
+  try {
+    if (!fs.existsSync(ANTILINK_LOG_FILE)) {
+      fs.writeFileSync(ANTILINK_LOG_FILE, JSON.stringify([], null, 2));
+    }
+    return JSON.parse(fs.readFileSync(ANTILINK_LOG_FILE));
+  } catch {
+    return [];
+  }
+}
+
+// Save logs
+function saveAntiLinkLogs(data) {
+  try {
+    fs.writeFileSync(ANTILINK_LOG_FILE, JSON.stringify(data, null, 2));
+  } catch {}
+}
+
+// Add log
+function logDeletedMessage(entry) {
+  const logs = loadAntiLinkLogs();
+  logs.push(entry);
+
+  // keep last 1000 logs only
+  if (logs.length > 1000) logs.shift();
+
+  saveAntiLinkLogs(logs);
+}
 async function handleGroupProtection(sock,msg){
 
 try{
@@ -4076,56 +4482,244 @@ const mention = "@"+userId.split("@")[0];
 const settings = groupCommandsCache[from] || {};
 
 
+// -------------------- ULTRA ANTI-LINK SYSTEM (FINAL) --------------------
+if (settings.antilinks === "on") {
+  const username = userId.split("@")[0];
+  const cleanText = normalizeText1(text || "");
 
+  // -------------------- DEBUG LOG --------------------
+  console.log("📩 NEW MESSAGE RECEIVED:", {
+    user: username,
+    from,
+    type: Object.keys(msg.message || {}),
+    raw: JSON.stringify(msg.message, null, 2)
+  });
 
-// -------------------- ANTISPAM --------------------
+  // -------------------- REGEX LINK DETECTION --------------------
+  const directLink = /((https?:\/\/|www\.)[^\s]+)/i;
+  const shortLinks = /(bit\.ly|tinyurl\.com|t\.co|goo\.gl|youtu\.be)/i;
+  const socialLinks = /(t\.me|discord\.gg|instagram\.com|facebook\.com|tiktok\.com|youtube\.com)/i;
+  const domain = /\b[a-z0-9-]+\.(com|net|org|io|gg|co|me|xyz|app|dev|ai|tv|ly|gl|site|online)\b/i;
+  const disguised = /(hxxp|h\s*t\s*t\s*p|dot\s*(com|net|org|gg|io))/i;
+  const unicodeDomain = /xn--[a-z0-9]+/i;
+
+  // -------------------- CONTEXT & QUOTED DETECTION --------------------
+  // get main message type dynamically
+  const messageType = Object.keys(msg.message || {})[0];
+  const mainMsg = msg.message?.[messageType] || {};
+
+  // context info exists inside mainMsg or message
+  const ctx = mainMsg.contextInfo || msg.message?.contextInfo || {};
+  const quoted = ctx?.quotedMessage || {};
+
+  // -------------------- CHANNEL / NEWSLETTER DETECTION --------------------
+  let newsletterName = "";
+  const isChannelShare =
+    !!ctx.forwardedNewsletterMessageInfo ||
+    !!ctx.newsletterForwardInfo ||
+    !!mainMsg.newsletterMessage ||
+    !!quoted.newsletterMessage;
+
+  if (ctx.forwardedNewsletterMessageInfo?.newsletterName) {
+    newsletterName = ctx.forwardedNewsletterMessageInfo.newsletterName;
+  }
+
+  const isExternalAd = !!ctx.externalAdReply?.sourceUrl || !!ctx.externalAdReply?.mediaUrl;
+  const isInvite = !!mainMsg.groupInviteMessage || !!mainMsg.groupInviteMessageV4;
+  const isInteractive = !!mainMsg.buttonsMessage || !!mainMsg.templateMessage || !!mainMsg.interactiveMessage;
+  const isForwardedHidden = ctx.isForwarded && (isChannelShare || isExternalAd);
+
+  // -------------------- BUTTON DETECTION --------------------
+  let hasButtonLink = false;
+
+  if (mainMsg.buttonsMessage?.buttons) {
+    for (const btn of mainMsg.buttonsMessage.buttons) {
+      if (btn.url || btn.call) {
+        hasButtonLink = true;
+        break;
+      }
+    }
+  }
+
+  if (mainMsg.templateMessage?.hydratedTemplate?.hydratedButtons) {
+    for (const btn of mainMsg.templateMessage.hydratedTemplate.hydratedButtons) {
+      if (btn.urlButton?.url || btn.callButton?.phoneNumber || btn.quickReplyButton) {
+        hasButtonLink = true;
+        break;
+      }
+    }
+  }
+
+  if (mainMsg.interactiveMessage?.headerButton?.urlButton?.url) hasButtonLink = true;
+
+  // -------------------- FINAL LINK CHECK --------------------
+  let hasLink =
+    directLink.test(cleanText) ||
+    shortLinks.test(cleanText) ||
+    socialLinks.test(cleanText) ||
+    domain.test(cleanText) ||
+    disguised.test(cleanText) ||
+    unicodeDomain.test(cleanText) ||
+    isChannelShare ||
+    isExternalAd ||
+    isInvite ||
+    isInteractive ||
+    isForwardedHidden ||
+    hasButtonLink;
+
+  // -------------------- WHITELIST --------------------
+  const whitelist = /https?:\/\/(?:www\.)?kiroflix\.cu\.ma/i;
+  if (whitelist.test(cleanText)) hasLink = false;
+
+  // -------------------- LOG DETECTIONS --------------------
+  console.log("🔍 ANTI-LINK CHECK:", {
+    cleanText,
+    hasLink,
+    types: Object.keys(msg.message || {}),
+    isChannelShare,
+    newsletterName,
+    isExternalAd,
+    isInvite,
+    isInteractive,
+    isForwardedHidden,
+    hasButtonLink
+  });
+
+  // -------------------- IF NO LINK → CONTINUE --------------------
+  if (!hasLink) {
+    console.log("✅ No link detected for this message");
+    return;
+  }
+
+  // -------------------- SAVE LOG BEFORE DELETE --------------------
+  logDeletedMessage({
+    group: from,
+    user: userId,
+    username,
+    text: text || "",
+    detected: {
+      directLink: directLink.test(cleanText),
+      domain: domain.test(cleanText),
+      disguised: disguised.test(cleanText),
+      channel: isChannelShare,
+      newsletter: newsletterName || null,
+      external: isExternalAd,
+      invite: !!isInvite,
+      interactive: !!isInteractive,
+      forwardedHidden: !!isForwardedHidden,
+      buttonLink: hasButtonLink
+    },
+    timestamp: new Date().toISOString()
+  });
+
+  // -------------------- DELETE MESSAGE --------------------
+  try {
+    await sock.sendMessage(from, { delete: msg.key });
+    console.log("🗑 Message deleted due to link/newsletter");
+  } catch (err) {
+    console.log("❌ Delete failed:", err.message);
+  }
+
+  // -------------------- WARN SYSTEM --------------------
+  if (!linkWarnings[from]) linkWarnings[from] = {};
+  if (!linkWarnings[from][userId]) linkWarnings[from][userId] = 0;
+
+  linkWarnings[from][userId]++;
+  const warn = linkWarnings[from][userId];
+
+  // -------------------- RESPONSE --------------------
+  if (warn < 5) {
+    let warnText = `🚫 *ANTI-LINK SYSTEM*\n\n⚠️ @${username}\nLinks / channels / invites / buttons are not allowed.\n\nWarning: ${warn}/5`;
+    if (newsletterName) warnText += `\n📰 Newsletter detected: ${newsletterName}`;
+    await sock.sendMessage(from, { text: warnText, mentions: [userId] });
+  } else {
+    await sock.sendMessage(from, {
+      text: `🔨 *ANTI-LINK SYSTEM*\n\n@${username} exceeded warnings.\n\n❌ User removed`,
+      mentions: [userId]
+    });
+
+    try { await sock.groupParticipantsUpdate(from, [userId], "remove"); } catch {}
+
+    linkWarnings[from][userId] = 0;
+    if (protectionCache.messages?.[from]?.[userId]) delete protectionCache.messages[from][userId];
+  }
+
+  return; // stop further processing
+}
+
+// -------------------- ANTISPAM (SMART DUPLICATE DETECTION) --------------------
 
 if (settings.antispam === "on") {
 
-  const recent = userMessages.filter(m => now - m.time < 30000);
+  const SPAM_WINDOW = 30000; // 30 seconds
+  const DUPLICATE_LIMIT = 4;
+  const MAX_WARNINGS = 3;
 
-  const duplicates =
-    recent.filter(m => m.text === text && now - m.time > 800);
+  const cleanText = (text || "").trim().toLowerCase();
 
-  if (duplicates.length >= 3) {
+  if (!warningCache[from]) warningCache[from] = {};
+  if (!warningCache[from][userId]) {
+    warningCache[from][userId] = {
+      count: 0,
+      lastText: "",
+      lastTime: 0
+    };
+  }
 
-    if (!warningCache[from]) warningCache[from] = {};
-    if (!warningCache[from][userId]) warningCache[from][userId] = 0;
+  const spamData = warningCache[from][userId];
 
-    warningCache[from][userId]++;
+  // Get recent messages
+  const recent = userMessages.filter(m => now - m.time < SPAM_WINDOW);
 
-    const warn = warningCache[from][userId];
+  const duplicates = recent.filter(
+    m => (m.text || "").trim().toLowerCase() === cleanText
+  );
 
-    if (warn < 3) {
+  // Reset spam if message changes
+  if (spamData.lastText !== cleanText) {
+    spamData.count = 0;
+  }
 
-      await sock.sendMessage(from, {
-        text: `⚠️ @${userId.split("@")[0]} stop spamming! Warning ${warn}/3`,
-        mentions: [userId]
+  spamData.lastText = cleanText;
+  spamData.lastTime = now;
+
+  if (duplicates.length >= DUPLICATE_LIMIT) {
+
+    spamData.count++;
+
+    const warn = spamData.count;
+    const username = userId.split("@")[0];
+
+    if (warn <= MAX_WARNINGS) {
+
+      await sock.sendMessage(from,{
+        text:`⚠️ @${username} stop spamming!\nWarning ${warn}/${MAX_WARNINGS}`,
+        mentions:[userId]
       });
 
     } else {
 
-      await sock.sendMessage(from, {
-        text: `🚫 @${userId.split("@")[0]} removed for spam`,
-        mentions: [userId]
+      await sock.sendMessage(from,{
+        text:`🚫 @${username} removed for spam`,
+        mentions:[userId]
       });
 
-      try {
-        await sock.groupParticipantsUpdate(from, [userId], "remove");
-      } catch {}
+      try{
+        await sock.groupParticipantsUpdate(from,[userId],"remove");
+      }catch{}
 
-      warningCache[from][userId] = 0;
+      spamData.count = 0;
+      spamData.lastText = "";
 
-      if (protectionCache.messages?.[from]?.[userId]) {
+      if (protectionCache.messages?.[from]?.[userId])
         delete protectionCache.messages[from][userId];
-      }
 
     }
 
     return;
   }
-}
 
+}
 // -------------------- ANTIFLOOD --------------------
 
 if (settings.antiflood === "on") {
@@ -4187,121 +4781,7 @@ if (settings.antiflood === "on") {
     return;
   }
 }
-// -------------------- ANTILINKS SMART PROTECTION --------------------
-if (settings.antilinks === "on") {
 
-  const cleanText = normalizeText1(text || "");
-
-  // ================= TEXT LINK DETECTION =================
-
-  const hasTextLink =
-    linkRegex.test(cleanText) ||
-    disguisedRegex.test(cleanText) ||
-    dotRegex.test(cleanText) ||
-    unicodeDomain.test(cleanText) ||
-    base64Regex.test(cleanText);
-
-  // ================= WHATSAPP SHARE DETECTION =================
-
-  const ctx = msg.message?.extendedTextMessage?.contextInfo || {};
-
-  // WhatsApp channel forward ("View Channel")
-  const channelForward =
-    ctx.forwardedNewsletterMessageInfo ||
-    ctx.newsletterForwardInfo;
-
-  // External embed preview (YouTube, TikTok, etc.)
-  const externalPreview =
-    ctx.externalAdReply &&
-    ctx.externalAdReply.sourceUrl;
-
-  // Group invite message
-  const groupInvite =
-    msg.message?.groupInviteMessage ||
-    msg.message?.groupInviteMessageV4;
-
-  // Interactive share buttons
-  const interactiveShare =
-    msg.message?.buttonsMessage ||
-    msg.message?.templateMessage ||
-    msg.message?.interactiveMessage;
-
-  // ================= FINAL DETECTION =================
-
-  let hasLink =
-    hasTextLink ||
-    channelForward ||
-    externalPreview ||
-    groupInvite ||
-    interactiveShare;
-
-  // ================= WHITELIST =================
-
-  const whitelistRegex = /https?:\/\/(?:www\.)?kiroflix\.cu\.ma/i;
-
-  if (whitelistRegex.test(cleanText)) {
-    hasLink = false;
-  }
-
-  if (!hasLink) return;
-
-  // ================= WARN SYSTEM =================
-
-  if (!linkWarnings[from]) linkWarnings[from] = {};
-  if (!linkWarnings[from][userId]) linkWarnings[from][userId] = 0;
-
-  linkWarnings[from][userId]++;
-
-  const warn = linkWarnings[from][userId];
-  const username = userId.split("@")[0];
-
-  // delete the link message
-  try {
-    await sock.sendMessage(from, { delete: msg.key });
-  } catch {}
-
-  if (warn < 5) {
-
-    await sock.sendMessage(from, {
-      text:
-`┏━━ 🚫 *ANTI-LINK PROTECTION* ━━┓
-┃
-┃ ⚠️ @${username}
-┃ Links & shared channels are not allowed.
-┃
-┃ Warning: *${warn}/5*
-┃
-┗━━━━━━━━━━━━━━━━━━━━`,
-      mentions: [userId]
-    });
-
-  } else {
-
-    await sock.sendMessage(from, {
-      text:
-`┏━━ 🔨 *ANTI-LINK SYSTEM* ━━┓
-┃
-┃ @${username}
-┃ exceeded the allowed warnings.
-┃
-┃ ❌ User removed
-┃
-┗━━━━━━━━━━━━━━━━━━━━`,
-      mentions: [userId]
-    });
-
-    try {
-      await sock.groupParticipantsUpdate(from, [userId], "remove");
-    } catch {}
-
-    linkWarnings[from][userId] = 0;
-
-    if (protectionCache.messages?.[from]?.[userId])
-      delete protectionCache.messages[from][userId];
-  }
-
-  return;
-}
 // -------------------- ANTIMENTION --------------------
 
 if (settings.antimention === "on") {
@@ -4592,14 +5072,15 @@ console.log("Protection error:",err.message);
 }
 async function sendGroupMenu(sock, from, sender) {
   try {
+    // -------------------- CHECK ADMIN --------------------
     const metadata = await sock.groupMetadata(from);
-
     const adminIds = metadata.participants
       .filter(p => p.admin === "admin" || p.admin === "superadmin")
       .map(p => p.id);
 
     if (!adminIds.includes(sender)) return;
 
+    // -------------------- GROUP COMMANDS BY CATEGORY --------------------
     const groupByCategory = (commands) => {
       const categories = {};
       for (const [name, data] of Object.entries(commands)) {
@@ -4613,7 +5094,12 @@ async function sendGroupMenu(sock, from, sender) {
     const allCommands = { ...toggledCommands, ...nonToggledCommands };
     const categories = groupByCategory(allCommands);
 
-    let text = `📋 *Kiroflix Menu*\n\n`;
+    // -------------------- MENU PAGE URL --------------------
+    const menuPageURL = "https://bot.kiroflix.site/menu"; // replace with your actual menu page
+
+    // -------------------- BUILD MENU TEXT --------------------
+    let text = `📋 *Kiroflix Bot Menu*\n`;
+    text += `🌐 View Full Menu Online: ${menuPageURL}\n\n`;
 
     for (const category in categories) {
       text += `📂 *${category}*\n`;
@@ -4625,31 +5111,25 @@ async function sendGroupMenu(sock, from, sender) {
 
     text += `💡 Type *.command explain* for details`;
 
+    // -------------------- SEND MENU --------------------
     await sock.sendMessage(from, { text });
 
   } catch (err) {
     console.error("Menu error:", err);
   }
 }
+
 //
 // -------------------- GROUP TOGGLE HANDLER --------------------
 //
 
+const toggleCooldown = {};
+
 async function handleGroupToggle(sock, from, sender, text) {
   try {
-    const metadata = await sock.groupMetadata(from);
-
-    const adminIds = metadata.participants
-      .filter(p => p.admin === "admin" || p.admin === "superadmin")
-      .map(p => p.id);
-
-    // ❌ Only admins allowed
-    if (!adminIds.includes(sender)) return false;
-
-    // ✅ Now accept direct commands: ".games on"
+    // -------------------- STRICT VALIDATION --------------------
     if (!text.startsWith(".")) return false;
 
-    // Example: ".games on"
     const cmdText = text.replace(/^\./, "").trim();
     const match = cmdText.match(/^([a-zA-Z0-9_-]+)\s+(on|off)$/i);
     if (!match) return false;
@@ -4660,7 +5140,47 @@ async function handleGroupToggle(sock, from, sender, text) {
 
     if (!toggledCommands[command]) return false;
 
-    // Initialize cache for group if missing
+    // -------------------- COOLDOWN (ANTI SPAM) --------------------
+    const now = Date.now();
+    if (!toggleCooldown[from]) toggleCooldown[from] = 0;
+
+    if (now - toggleCooldown[from] < 3000) {
+      return true; // silent → NO spam message
+    }
+
+    toggleCooldown[from] = now;
+
+    // -------------------- METADATA CACHE --------------------
+    let metadata = groupMetadataCache[from]?.data;
+
+    if (!metadata || Date.now() - groupMetadataCache[from].time > 60000) {
+      try {
+        const meta = await sock.groupMetadata(from);
+
+        if (!meta || !meta.participants) return true;
+
+        groupMetadataCache[from] = {
+          data: meta,
+          time: Date.now()
+        };
+
+        metadata = meta;
+
+      } catch (err) {
+        console.log("❌ Metadata error:", err.message);
+        return true; // silent fail
+      }
+    }
+
+    if (!metadata?.participants) return true;
+
+    const adminIds = metadata.participants
+      .filter(p => p.admin === "admin" || p.admin === "superadmin")
+      .map(p => p.id);
+
+    if (!adminIds.includes(sender)) return true; // silent
+
+    // -------------------- INIT CACHE --------------------
     if (!groupCommandsCache[from]) {
       groupCommandsCache[from] = {};
       Object.keys(toggledCommands).forEach(cmd => {
@@ -4668,17 +5188,23 @@ async function handleGroupToggle(sock, from, sender, text) {
       });
     }
 
-    // ✅ Update cache
+    // -------------------- UPDATE CACHE --------------------
     groupCommandsCache[from][command] = action;
 
-    // ✅ Update backend
-    const result = await updateCommandStatus(from, sender, command, action);
+    // -------------------- BACKEND UPDATE --------------------
+    let result;
+    try {
+      result = await updateCommandStatus(from, sender, command, action);
+    } catch (err) {
+      if (err.message?.includes("rate-overlimit")) {
+        // ❌ DO NOT SPAM GROUP
+        return true;
+      }
+      throw err;
+    }
 
-    if (result.status === "error") {
-      await sock.sendMessage(from, {
-        text: `⚠️ Failed to update command`
-      });
-    } else {
+    // -------------------- SUCCESS RESPONSE --------------------
+    if (result?.status !== "error") {
       await sock.sendMessage(from, {
         text: `🎯 *${command}* has been set to *${action}*`
       });
@@ -4688,67 +5214,7 @@ async function handleGroupToggle(sock, from, sender, text) {
 
   } catch (err) {
     console.error("❌ Failed to handle toggle:", err.message);
-    await sock.sendMessage(from, { text: `⚠️ Error updating command` });
-    return true;
-  }
-}
-//
-// -------------------- GROUP TOGGLE HANDLER --------------------
-//
-
-async function handleGroupToggle(sock, from, sender, text) {
-  try {
-    const metadata = await sock.groupMetadata(from);
-
-    const adminIds = metadata.participants
-      .filter(p => p.admin === "admin" || p.admin === "superadmin")
-      .map(p => p.id);
-
-    // ❌ Only admins allowed
-    if (!adminIds.includes(sender)) return false;
-
-    // ❌ Only toggle if used with a dot command
-    if (!text.toLowerCase().startsWith(".")) return false;
-
-    // Example: ".games on"
-    const cmdText = text.replace(/^\./, "").trim();
-    const match = cmdText.match(/^([a-zA-Z0-9_-]+)\s+(on|off)$/i);
-    if (!match) return false;
-
-    const [, commandRaw, actionRaw] = match;
-    const command = commandRaw.toLowerCase();
-    const action = actionRaw.toLowerCase();
-
-    if (!toggledCommands[command]) return false;
-
-    // Initialize cache for group if missing
-    if (!groupCommandsCache[from]) {
-      groupCommandsCache[from] = {};
-      Object.keys(toggledCommands).forEach(cmd => (groupCommandsCache[from][cmd] = "on"));
-    }
-
-    // ✅ Update cache
-    groupCommandsCache[from][command] = action;
-
-    // ✅ Update backend
-    const result = await updateCommandStatus(from, sender, command, action);
-
-    if (result.status === "error") {
-      await sock.sendMessage(from, {
-        text: `⚠️ Failed to update command`
-      });
-    } else {
-      await sock.sendMessage(from, {
-        text: `🎯 *${command}* has been set to *${action}*`
-      });
-    }
-
-    return true;
-
-  } catch (err) {
-    console.error("❌ Failed to handle toggle:", err.message);
-    await sock.sendMessage(from, { text: `⚠️ Error updating command` });
-    return true;
+    return true; // silent fail → NO spam
   }
 }
 // 🚫 Banned users cache
@@ -5589,7 +6055,7 @@ async function fetchMessagesChunksAndProcess(sock) {
 
       const groupsPayload = botAdminGroupsArray.map(gid => ({
         groupId: gid,
-        messages: [] // backend merges messages
+        messages: []
       }));
 
       let res;
@@ -5623,8 +6089,8 @@ async function fetchMessagesChunksAndProcess(sock) {
 
         anyProcessed = true;
 
-        // Build AI prompt
-        const prompt = `
+        // 1️⃣ AI: analyze messages & assign points
+        const promptPoints = `
 You are an AI inside an anime & manhwa bot named Kiroflix Bot.
 Analyze these 100 messages and assign general points (0–5) per user based on:
 - Participation
@@ -5636,50 +6102,76 @@ Do NOT assign points per message. Give a summary per user in JSON.
 
 Messages: ${JSON.stringify(chunkData.messages)}
 `;
-
-        const aiResponse = await askAI(prompt);
+        const aiResponse = await askAI(promptPoints);
         console.log(`📝 AI summary points for group ${gid}:\n`, aiResponse);
 
-        // Save full AI response in group history
+        // Save history
         const groupFile = path.join(historyDir, `${gid}.json`);
         let history = [];
         if (fs.existsSync(groupFile)) {
-          try {
-            history = JSON.parse(fs.readFileSync(groupFile, "utf-8")) || [];
-          } catch {}
+          try { history = JSON.parse(fs.readFileSync(groupFile, "utf-8")) || []; } catch {}
         }
         history.push({ timestamp: new Date().toISOString(), aiResponse });
         fs.writeFileSync(groupFile, JSON.stringify(history, null, 2));
 
-        // Clean AI JSON (remove ```json blocks)
+        // Clean JSON
         const aiResponseClean = aiResponse.replace(/```json/g, "").replace(/```/g, "").trim();
-
         let userPoints = {};
-        try {
-          userPoints = JSON.parse(aiResponseClean);
-        } catch (err) {
+        try { userPoints = JSON.parse(aiResponseClean); } catch (err) {
           console.error("❌ Failed parsing AI JSON:", err.message);
           continue;
         }
 
-        // Save points using quiz system
+        // Save points
         for (const [userId, data] of Object.entries(userPoints)) {
           const pts = data.points || 0;
-
           const oldData = await getUserRank(gid, userId);
-          await saveScores(gid, { [userId]: pts }); // quiz save function
+          await saveScores(gid, { [userId]: pts });
           const newData = await getUserRank(gid, userId);
-
           if (oldData && newData) {
             await checkRankUpdate(
-              sock,
-              gid,
-              userId,
-              oldData.points,
-              newData.points,
-              oldData.position,
-              newData.position
+              sock, gid, userId,
+              oldData.points, newData.points,
+              oldData.position, newData.position
             );
+          }
+        }
+
+        // 2️⃣ AI: generate casual suggestions if relevant
+        const messagesText = chunkData.messages.map(m => m.text).join("\n");
+        const promptSuggestion = `
+You are Kiroflix Bot, an anime & manhwa assistant.
+You are very helpful, friendly, and casual. You analyze messages in a casual admin group.
+Your goal: suggest **1 short, casual tip, feature, or website** if relevant to the conversation.
+
+Only suggest if a message is clearly related to:
+- Bot features: commands, anime streaming, manhwa reading, wallpapers, sticker maker, quizzes, guess games, watch parties, waifu system
+- Kiroflix website/apps for anime streaming
+- Anything that improves the group experience
+
+Always mention the bot features in context if helpful.
+Include the link: https://kiroflix.cu.ma as the official streaming site for English sub anime.
+Mention casually that soon we will support English dubs.
+
+Keep it **short, friendly, non-spammy, and under 200 characters**.  
+Skip if the message is not related.
+
+Bot features & commands to reference if needed:
+${JSON.stringify({ toggledCommands, nonToggledCommands }, null, 2)}
+
+Messages:
+${messagesText}
+`;
+
+        const aiSuggestion = await askAI(promptSuggestion);
+        if (aiSuggestion && aiSuggestion.length < 200) { // only short casual suggestion
+          // Find the latest message ID to reply to
+          const lastMessage = chunkData.messages[chunkData.messages.length - 1];
+          if (lastMessage) {
+            await sock.sendMessage(gid, {
+              text: aiSuggestion
+            }, { quoted: { key: { remoteJid: gid, id: lastMessage.id }, message: lastMessage } });
+            console.log(`💡 Sent suggestion to group ${gid}:`, aiSuggestion);
           }
         }
 
@@ -5743,6 +6235,7 @@ async function backupAuthFolder() {
 
 // ================= RESTORE =================
 async function restoreAuthFolder() {
+    return;
 
   if (restoring) {
     console.log("⏳ Restore already running...");
@@ -5848,6 +6341,7 @@ setInterval(async () => {
 
 }, 5000);
 async function ensureAuthFolder() {
+    return;
 
   if (fs.existsSync(AUTH_DIR)) {
     console.log("✅ Auth folder exists");
@@ -5885,6 +6379,87 @@ async function ensureAuthFolder() {
   }
 
 }
+const suggestedFeaturesCache = {}; // groupId -> { feature: true }
+
+async function sendFriendlyNudge(sock) {
+  try {
+    const groupIds = Object.keys(groupCommandsCache);
+    if (!groupIds.length) return;
+
+    // Randomly pick 1-3 groups per cycle
+    const selectedGroups = groupIds.sort(() => 0.5 - Math.random()).slice(0, 3);
+
+    for (const groupId of selectedGroups) {
+      const cmds = groupCommandsCache[groupId];
+      if (!cmds) continue;
+
+      if (!suggestedFeaturesCache[groupId]) suggestedFeaturesCache[groupId] = {};
+
+      const suggestions = [];
+
+      // ✅ Check welcome message
+      if (!welcomeCache[groupId] && !suggestedFeaturesCache[groupId].welcome) {
+        suggestions.push("Hey! You can add a custom welcome message with `.welcome edit <text>` 🎉");
+        suggestedFeaturesCache[groupId].welcome = true;
+      }
+
+      // ✅ Check farewell message
+      if (!goodbyeCache[groupId]?.text && !suggestedFeaturesCache[groupId].salutation) {
+        suggestions.push("Don't forget to set a farewell message with `.salutation edit <text>` 👋");
+        suggestedFeaturesCache[groupId].salutation = true;
+      }
+
+      // ✅ Check badwords
+      if (!badWordsDB.groups[groupId]?.length && !suggestedFeaturesCache[groupId].badwords) {
+        suggestions.push("Protect your group! Add some banned words using `.badword add <words>` 🚫");
+        suggestedFeaturesCache[groupId].badwords = true;
+      }
+
+      // ✅ Check ranks
+      if (!rankCache[groupId]?.length && !suggestedFeaturesCache[groupId].ranks) {
+        suggestions.push("Set up ranks to reward active members with `.rank add <Rank Name> points 100` 🏅");
+        suggestedFeaturesCache[groupId].ranks = true;
+      }
+
+      // ✅ Check toggled commands that are OFF
+      const importantCommands = [
+        "games","waifu","antispam","antiflood","antilinks","antiraid",
+        "antimention","antistickers","raidlock","mute","slowmode","stickersmaker","autogames"
+      ];
+
+      for (const cmd of importantCommands) {
+        if (cmds[cmd] === "off" && !suggestedFeaturesCache[groupId][cmd]) {
+          suggestions.push(`Try enabling \`.${cmd}\` to make your group safer/fun! 🔧`);
+          suggestedFeaturesCache[groupId][cmd] = true;
+        }
+      }
+
+      // ✅ Suggest Kiroflix streaming feature
+      if (!suggestedFeaturesCache[groupId].animeStream) {
+        suggestions.push("Did you know? Members can watch anime at kiroflix.cu.ma 🍿 (English sub, dub coming soon!)");
+        suggestedFeaturesCache[groupId].animeStream = true;
+      }
+
+      if (!suggestions.length) continue;
+
+      // Pick one random suggestion to avoid spamming
+      const message = suggestions[Math.floor(Math.random() * suggestions.length)];
+
+      // Send message with simulated typing
+      await sock.presenceUpdate(groupId, "composing"); // "typing..." indicator
+      await sleep(2000 + Math.random() * 3000); // random delay 2-5 sec
+      await sock.sendMessage(groupId, { text: message });
+
+      console.log(`💡 Sent friendly nudge to group ${groupId}:`, message);
+
+      await sleep(2000); // small pause before next group
+    }
+  } catch (err) {
+    console.error("❌ Friendly nudge error:", err);
+  }
+}
+const translateCooldown = {}; // { userId: { count, lastTime } }
+
 async function startBot() {
   
   const { state, saveCreds } = await useMultiFileAuthState("auth");
@@ -5957,6 +6532,8 @@ async function startBot() {
   },20000);
 
   setInterval(syncLogsBatch, 1 * 60 * 1000);
+  // Call every hour
+setInterval(() => sendFriendlyNudge(sock), 60 * 60 * 1000);
 
   // random hourly
   runHourlyRandom(() => checkNewEpisodes(sock));
@@ -5996,7 +6573,7 @@ setInterval(async () => {
     if (activeGames[groupId]) continue;
 
     if (groupCommandsCache[groupId]?.bot === "off") continue;
-    if (groupCommandsCache[groupId]?.games !== "on") continue;
+    if (groupCommandsCache[groupId]?.autogames !== "on") continue;
     
 
     console.log("🎮 Starting game in", groupId);
@@ -6018,254 +6595,262 @@ setInterval(async () => {
 
   sock.ev.on("creds.update", saveCreds);
   // -------------------- WELCOME NEW MEMBERS --------------------
+// -------------------- GROUP PARTICIPANTS HANDLER --------------------
 sock.ev.on("group-participants.update", async (update) => {
   const groupId = update.id;
-  for (const participant of update.participants) {
-    const userJid = typeof participant === "string" ? participant : participant?.id;
-    if (!userJid) continue;
 
-    if (userJid !== BOT_ID) continue; // only track the bot
+  try {
+    // -------------------- FETCH METADATA (ONCE) --------------------
+    let metadata;
+    try {
+      metadata = await sock.groupMetadata(groupId);
+    } catch (err) {
+      console.log(`⚠️ Failed to fetch metadata for ${groupId}:`, err?.message || err);
 
-    if (update.action === "promote") {
-      botAdminGroups.add(groupId);
-      console.log(`🟢 Bot promoted in group ${groupId}. Added to list.`);
-    } else if (update.action === "demote") {
-      botAdminGroups.delete(groupId);
-      console.log(`🔴 Bot demoted in group ${groupId}. Removed from list.`);
+      if (err?.data === 403) {
+        botAdminGroups.delete(groupId);
+        console.log(`🚫 Removed ${groupId} (no access)`);
+      }
+
+      return;
     }
-  }
-  // -------------------- ADMIN LOG --------------------
-if (groupCommandsCache[groupId]?.adminlog === "on") {
 
-  let metadata;
+    const groupName = metadata?.subject || "this group";
 
-try {
-  metadata = await sock.groupMetadata(groupId);
-} catch (err) {
-  console.log(`⚠️ Failed to fetch metadata for ${groupId}:`, err?.message || err);
+    // -------------------- BOT ADMIN TRACK --------------------
+    for (const participant of update.participants) {
+      const userJid = typeof participant === "string" ? participant : participant?.id;
+      if (!userJid) continue;
 
-  // Optional: remove group if forbidden
-  if (err?.data === 403) {
-    botAdminGroups.delete(groupId);
-    console.log(`🚫 Removed ${groupId} (forbidden / no access)`);
-  }
+      if (userJid !== BOT_ID) continue;
 
-  return; // ⛔ IMPORTANT: stop processing this event
-}
-  const owner = metadata.owner || metadata.participants.find(p => p.admin === "superadmin")?.id;
+      if (update.action === "promote") {
+        botAdminGroups.add(groupId);
+        console.log(`🟢 Bot promoted in ${groupId}`);
+      }
 
-  for (const participant of update.participants) {
+      if (update.action === "demote") {
+        botAdminGroups.delete(groupId);
+        console.log(`🔴 Bot demoted in ${groupId}`);
+      }
+    }
 
-    const userJid = typeof participant === "string"
-      ? participant
-      : participant?.id;
+    // -------------------- ADMIN LOG --------------------
+    if (groupCommandsCache[groupId]?.adminlog === "on") {
 
-    if (!userJid) continue;
+      const owner =
+        metadata.owner ||
+        metadata.participants.find(p => p.admin === "superadmin")?.id;
 
-    const username = userJid.split("@")[0];
+      for (const participant of update.participants) {
+        const userJid = typeof participant === "string" ? participant : participant?.id;
+        if (!userJid) continue;
 
-    let logMessage = "";
+        const username = userJid.split("@")[0];
+        let logMessage = "";
 
-    if (update.action === "add") {
-      logMessage =
-`📢 Admin Activity
+        if (update.action === "add") {
+          logMessage = `📢 Admin Activity
 
 User added: @${username}
+Group: ${groupName}`;
+        }
 
-Group: ${metadata.subject}`;
-    }
-
-    else if (update.action === "remove") {
-      logMessage =
-`📢 Admin Activity
+        if (update.action === "remove") {
+          logMessage = `📢 Admin Activity
 
 User removed: @${username}
+Group: ${groupName}`;
+        }
 
-Group: ${metadata.subject}`;
-    }
+        if (update.action === "promote") {
+          logMessage = `📢 Admin Activity
 
-    else if (update.action === "promote") {
-      logMessage =
-`📢 Admin Activity
+User promoted: @${username}
+Group: ${groupName}
 
-User promoted to admin: @${username}
+ℹ️ WhatsApp doesn't reveal who did it.`;
+        }
 
-Group: ${metadata.subject}
-
-ℹ️ WhatsApp does not reveal which admin performed this action.`;
-    }
-
-    else if (update.action === "demote") {
-      logMessage =
-`📢 Admin Activity
+        if (update.action === "demote") {
+          logMessage = `📢 Admin Activity
 
 Admin removed: @${username}
+Group: ${groupName}
 
-Group: ${metadata.subject}
+ℹ️ WhatsApp doesn't reveal who did it.`;
+        }
 
-ℹ️ WhatsApp does not reveal which admin performed this action.`;
+        if (logMessage && owner) {
+          await sock.sendMessage(owner, {
+            text: logMessage,
+            mentions: [userJid]
+          });
+        }
+      }
     }
 
-    if (logMessage && owner) {
-      await sock.sendMessage(owner, {
-        text: logMessage,
-        mentions: [userJid]
-      });
-    }
-
-  }
-
-}
-
-  try {
     // -------------------- ANTI RAID --------------------
-if (["add","invite"].includes(update.action)) {
+    if (["add", "invite"].includes(update.action)) {
+      const now = Date.now();
 
-  const now = Date.now();
+      if (!protectionCache.joins[groupId])
+        protectionCache.joins[groupId] = [];
 
-  if (!protectionCache.joins[groupId])
-    protectionCache.joins[groupId] = [];
+      protectionCache.joins[groupId].push(now);
 
-  protectionCache.joins[groupId].push(now);
+      protectionCache.joins[groupId] =
+        protectionCache.joins[groupId].filter(t => now - t < 15000);
 
-  protectionCache.joins[groupId] =
-    protectionCache.joins[groupId].filter(t => now - t < 15000);
-
-  if (protectionCache.joins[groupId].length >= 8) {
-
-    await sock.sendMessage(groupId,{
-      text:"🚨 Raid detected! Too many users joined."
-    });
-
-  }
-}
+      if (protectionCache.joins[groupId].length >= 8) {
+        await sock.sendMessage(groupId, {
+          text: "🚨 Raid detected! Too many users joined."
+        });
+      }
+    }
 
     // -------------------- WELCOME --------------------
-if (["add","invite"].includes(update.action)) {
-  const template = welcomeCache[groupId];
-  if (!template) return;
+    if (["add", "invite"].includes(update.action)) {
 
-  // Get group icon once
-  let groupIconUrl = null;
-  try {
-    groupIconUrl = await sock.profilePictureUrl(groupId, "image");
-  } catch {
-    // no group icon, fallback to text-only
-    groupIconUrl = null;
-  }
+      const defaultTemplate = {
+        text: `👋 Welcome ✦「 {user} 」 to {group}!`,
+        image: null
+      };
 
-  for (const participant of update.participants) {
+      const template = {
+        text: welcomeCache[groupId]?.text || defaultTemplate.text,
+        image: welcomeCache[groupId]?.image || defaultTemplate.image
+      };
 
-    const userJid = typeof participant === "string" ? participant : participant?.id;
-    if (!userJid) continue;
+      let groupIconUrl = null;
+      try {
+        groupIconUrl = await sock.profilePictureUrl(groupId, "image");
+      } catch {}
 
-    // -------------------- CLEAR CACHE --------------------
-    if (protectionCache.messages?.[groupId]?.[userJid])
-      delete protectionCache.messages[groupId][userJid];
+      for (const participant of update.participants) {
 
-    if (protectionCache.stickers?.[userJid])
-      delete protectionCache.stickers[userJid];
+        const userJid = typeof participant === "string" ? participant : participant?.id;
+        if (!userJid) continue;
 
-    if (protectionCache.slowmode?.[userJid])
-      delete protectionCache.slowmode[userJid];
+        const username = userJid.split("@")[0];
 
-    if (floodWarnings?.[groupId]?.[userJid])
-      delete floodWarnings[groupId][userJid];
+        // -------------------- BOT INTRO --------------------
+        if (userJid === BOT_ID && update.action === "add") {
 
-    if (warningCache?.[groupId]?.[userJid])
-      delete warningCache[groupId][userJid];
+          const admins = metadata.participants
+            .filter(p => p.admin === "admin" || p.admin === "superadmin")
+            .map(a => a.id);
 
-    const username = userJid.split("@")[0];
-    const message = template.replace("{user}", `✦「 @${username} 」`);
+          const intro = `👋 Hello ${admins.map(a => `@${a.split("@")[0]}`).join(", ")}
 
-    // -------------------- SEND MESSAGE --------------------
-    try {
-      if (groupIconUrl) {
-        await sock.sendMessage(groupId, {
-          image: { url: groupIconUrl },
-          caption: message,
-          mentions: [userJid],
-        });
-      } else {
-        await sock.sendMessage(groupId, {
-          text: message,
-          mentions: [userJid],
-        });
-      }
-    } catch {
-      // fallback if sending image fails
-      await sock.sendMessage(groupId, {
-        text: message,
-        mentions: [userJid],
-      });
-    }
-  }
-}
+I am a *multi-purpose Anime bot* ⚡
 
+⚙️ Make me admin to unlock full features.
 
-// -------------------- FAREWELL --------------------
-if (["remove", "leave"].includes(update.action)) {
+🎮 Games, moderation, anime tools & more coming!`;
 
-  const cache = goodbyeCache[groupId];
-  if (!cache) {
-    console.log("⚠️ No farewell cache for group:", groupId);
-    return;
-  }
+          await sock.sendMessage(groupId, {
+            text: intro,
+            mentions: admins
+          });
 
-  console.log("📦 Farewell cache:", {
-    textLength: cache.text?.length,
-    hasImage: !!cache.image
-  });
-
-  for (const participant of update.participants) {
-
-    const userJid = typeof participant === "string" ? participant : participant?.id;
-    if (!userJid) continue;
-
-    const username = userJid.split("@")[0];
-    const messageText = cache.text
-      ? cache.text.replace("{user}", `✦「 @${username} 」`)
-      : `👋 Goodbye @${username}`;
-
-    console.log("📨 Sending farewell to:", userJid);
-
-    try {
-      let messagePayload = {};
-
-      if (cache.image) {
-        // Handle image URL or base64
-        if (cache.image.startsWith("http")) {
-          console.log("🌐 Sending farewell image via URL:", cache.image);
-          messagePayload.image = { url: cache.image };
-        } else {
-          console.log("🖼 Sending farewell image via base64");
-          const buffer = Buffer.from(cache.image, "base64");
-          console.log("📦 Image buffer size:", buffer.length);
-          messagePayload.image = buffer;
+          continue; // skip normal welcome for bot
         }
-        messagePayload.caption = messageText;
-        messagePayload.mentions = [userJid];
-      } else {
-        // Text-only fallback
-        messagePayload = {
-          text: messageText,
-          mentions: [userJid]
-        };
+
+        // -------------------- CLEAR CACHE --------------------
+        if (protectionCache.messages?.[groupId]?.[userJid])
+          delete protectionCache.messages[groupId][userJid];
+
+        if (protectionCache.stickers?.[userJid])
+          delete protectionCache.stickers[userJid];
+
+        if (protectionCache.slowmode?.[userJid])
+          delete protectionCache.slowmode[userJid];
+
+        if (floodWarnings?.[groupId]?.[userJid])
+          delete floodWarnings[groupId][userJid];
+
+        if (warningCache?.[groupId]?.[userJid])
+          delete warningCache[groupId][userJid];
+
+        // -------------------- SAFE MESSAGE --------------------
+        const safeText = template.text || `👋 Welcome @${username}`;
+
+        const message = safeText
+          .replace("{user}", `✦「 @${username} 」`)
+          .replace("{group}", groupName);
+
+        // -------------------- SEND --------------------
+        try {
+          if (groupIconUrl) {
+            await sock.sendMessage(groupId, {
+              image: { url: groupIconUrl },
+              caption: message,
+              mentions: [userJid],
+            });
+          } else {
+            await sock.sendMessage(groupId, {
+              text: message,
+              mentions: [userJid],
+            });
+          }
+        } catch {
+          await sock.sendMessage(groupId, {
+            text: message,
+            mentions: [userJid],
+          });
+        }
       }
-
-      await sock.sendMessage(groupId, messagePayload);
-      console.log(`👋 Farewell sent in group for ${userJid}`);
-
-    } catch (err) {
-      console.error("❌ Failed sending farewell:", err);
-      // fallback to text-only
-      await sock.sendMessage(groupId, {
-        text: messageText,
-        mentions: [userJid]
-      });
     }
-  }
-}
+
+    // -------------------- FAREWELL --------------------
+    if (["remove", "leave"].includes(update.action)) {
+
+      const cache = goodbyeCache[groupId];
+      if (!cache) return;
+
+      for (const participant of update.participants) {
+
+        const userJid = typeof participant === "string" ? participant : participant?.id;
+        if (!userJid) continue;
+
+        const username = userJid.split("@")[0];
+
+        const messageText = (cache.text || `👋 Goodbye @${username}`)
+          .replace("{user}", `✦「 @${username} 」`);
+
+        try {
+          let payload = {};
+
+          if (cache.image) {
+            if (cache.image.startsWith("http")) {
+              payload.image = { url: cache.image };
+            } else {
+              payload.image = Buffer.from(cache.image, "base64");
+            }
+
+            payload.caption = messageText;
+            payload.mentions = [userJid];
+          } else {
+            payload = {
+              text: messageText,
+              mentions: [userJid]
+            };
+          }
+
+          await sock.sendMessage(groupId, payload);
+
+        } catch (err) {
+          console.error("❌ Farewell error:", err);
+
+          await sock.sendMessage(groupId, {
+            text: messageText,
+            mentions: [userJid]
+          });
+        }
+      }
+    }
+
   } catch (err) {
     console.error("❌ Group participants handler error:", err);
   }
@@ -6281,6 +6866,13 @@ if (type !== "notify") return;
     if (!msg.message || msg.key.fromMe) return;
 
     const from = msg.key.remoteJid;
+
+const body =
+msg.message?.conversation ||
+msg.message?.extendedTextMessage?.text ||
+msg.message?.imageMessage?.caption ||
+msg.message?.videoMessage?.caption ||
+""
     const isGroup = from.endsWith("@g.us");
     const userId = msg.key.participant || msg.key.remoteJid;
     if (isGroup) {
@@ -6640,8 +7232,13 @@ if (isGroup) {
   }
 
   // 2️⃣ Toggle commands like ".games on/off"
+  // Detect toggle command pattern: ".command on/off"
+const toggleMatch = text.match(/^\.[a-zA-Z0-9_-]+\s+(on|off)$/i);
+
+if (isGroup && toggleMatch) {
   const handled = await handleGroupToggle(sock, from, msg.key.participant || from, text);
   if (handled) return;
+}
 }
 // -------------------- ADMIN CONFIRM FAREWELL --------------------
 if (isGroup && text.toLowerCase() === "yes") {
@@ -6675,6 +7272,214 @@ if (isGroup && text.toLowerCase() === "yes") {
     text:"✅ Farewell message sent privately."
   });
 
+  return;
+}
+if (isGroup && text.toLowerCase().startsWith(".translate")) {
+  const sender = msg.key.participant || msg.key.remoteJid;
+
+  // Must reply to a message
+  const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+  if (!quotedMsg) {
+    await sock.sendMessage(from, { text: "❌ Reply to a message to translate it.", mentions: [sender] });
+    return;
+  }
+
+  // Extract text from replied message
+  const originalText =
+    quotedMsg.conversation ||
+    quotedMsg.extendedTextMessage?.text ||
+    quotedMsg?.imageMessage?.caption ||
+    "";
+    
+  if (!originalText) {
+    await sock.sendMessage(from, { text: "❌ Cannot translate this type of message.", mentions: [sender] });
+    return;
+  }
+
+  // Limit message length
+  if (originalText.length > 500) {
+    await sock.sendMessage(from, { text: "❌ Message too long to translate (max 500 chars).", mentions: [sender] });
+    return;
+  }
+
+  // -------------------- RATE LIMIT --------------------
+  const now = Date.now();
+  if (!translateCooldown[sender]) translateCooldown[sender] = { count: 0, lastTime: now };
+
+  const userData = translateCooldown[sender];
+
+  // Reset count if > 1 minute passed
+  if (now - userData.lastTime > 60000) {
+    userData.count = 0;
+    userData.lastTime = now;
+  }
+
+  if (userData.count >= 3) {
+    await sock.sendMessage(from, { text: "⏳ Translation limit reached. Try again in 1 minute.", mentions: [sender] });
+    return;
+  }
+
+  userData.count++;
+  userData.lastTime = now;
+
+  // -------------------- CALL AI TRANSLATE --------------------
+  try {
+    const translatedText = await askAI(`Translate the following text into English:\n${originalText}`);
+    
+    await sock.sendMessage(from, {
+      text: `🌐 Translation:\n${translatedText}`,
+      mentions: [sender]
+    });
+  } catch (err) {
+    console.error("❌ Translation error:", err);
+    await sock.sendMessage(from, { text: "⚠️ Failed to translate. Try again later.", mentions: [sender] });
+  }
+
+  return;
+}
+if (isGroup && text.toLowerCase().startsWith(".tagall")) {
+  const sender = msg.key.participant || msg.key.remoteJid;
+
+  // Only admins can tag all
+  const admins = await getGroupAdmins(sock, from);
+  if (!admins.includes(sender)) {
+    await sock.sendMessage(from, {
+      text: "❌ Only group admins can use this command.",
+      mentions: [sender]
+    });
+    return;
+  }
+
+  // Get group metadata
+  let metadata;
+  try {
+    metadata = await sock.groupMetadata(from);
+  } catch (err) {
+    console.error("❌ Failed to fetch group metadata:", err);
+    await sock.sendMessage(from, { text: "⚠️ Cannot fetch group members.", mentions: [sender] });
+    return;
+  }
+
+  const members = metadata.participants.map(p => p.id);
+
+  // Split into chunks to avoid message too long (optional, adjust 50 per message)
+  const chunkSize = 1100;
+  for (let i = 0; i < members.length; i += chunkSize) {
+    const chunk = members.slice(i, i + chunkSize);
+    const textMessage = `📢 Tagging all members:\n${chunk.map(u => `@${u.split("@")[0]}`).join(" ")}`
+    
+    await sock.sendMessage(from, {
+      text: textMessage,
+      mentions: chunk
+    });
+  }
+
+  return;
+}
+// -------------------- ABOUT COMMAND --------------------
+if (isGroup && text.toLowerCase() === ".about") {
+  const message = 
+`🤖 *Bot Info*
+
+This bot helps manage groups, protect against spam, links, bad words, and more.
+Current version: 1.0.0
+Developed for fun and safe group management.`;
+
+  await sock.sendMessage(from, { text: message });
+  return;
+}
+// -------------------- RULES COMMAND --------------------
+if (isGroup && text.toLowerCase() === ".rules") {
+  const message = 
+`📜 *Bot Usage Rules*
+
+1. Be respectful to all members; harassment or offensive content is prohibited.
+2. No nudity, sexual content, or racist material is allowed.
+3. Do not share illegal or inappropriate links.
+4. Stickers, images, and media must follow group guidelines.
+5. Violating rules may result in warnings, message deletions, or removal by admins.
+6. The bot may automatically leave groups that violate usage policies.
+7. To give feedback or report issues, DM the bot. All messages are reviewed by bot admins.`;
+
+  await sock.sendMessage(from, { text: message });
+  return;
+}
+// -------------------- ADMINS LIST --------------------
+if (isGroup && text.toLowerCase() === ".admins") {
+  const metadata = await sock.groupMetadata(from);
+  const adminList = metadata.participants
+    .filter(p => ["admin", "superadmin"].includes(p.admin))
+    .map(p => `@${p.id.split("@")[0]}`)
+    .join("\n");
+
+  await sock.sendMessage(from, {
+    text: `📋 *Group Admins:*\n${adminList}`,
+    mentions: metadata.participants
+      .filter(p => ["admin", "superadmin"].includes(p.admin))
+      .map(p => p.id)
+  });
+  return;
+}
+
+// -------------------- SHOW ID --------------------
+if (isGroup && text.toLowerCase() === ".id") {
+  const userId = msg.key.participant || msg.key.remoteJid;
+  await sock.sendMessage(from, {
+    text: `🆔 *Group ID:* ${from}\n👤 *Your ID:* ${userId}`,
+    mentions: [userId]
+  });
+  return;
+}
+
+// -------------------- BOT ONLINE STATUS --------------------
+if (text.toLowerCase() === ".online") {
+  await sock.sendMessage(from, { text: "✅ I am online and ready!" });
+  return;
+}
+
+// -------------------- PING COMMAND --------------------
+if (text.toLowerCase() === ".ping") {
+  const start = Date.now();
+  await sock.sendMessage(from, { text: "🏓 Pong!" });
+  const latency = Date.now() - start;
+  await sock.sendMessage(from, { text: `⏱ Latency: ${latency}ms` });
+  return;
+}
+// -------------------- ROLL DICE --------------------
+if (text.toLowerCase() === ".roll") {
+  const roll = Math.floor(Math.random() * 6) + 1; // 1–6
+  await sock.sendMessage(from, { text: `🎲 You rolled a *${roll}*` });
+  return;
+}
+
+// -------------------- FLIP COIN --------------------
+if (text.toLowerCase() === ".flip") {
+  const outcome = Math.random() < 0.5 ? "Heads 🪙" : "Tails 🪙";
+  await sock.sendMessage(from, { text: `🪙 Coin flip result: *${outcome}*` });
+  return;
+}
+
+// -------------------- RANDOM JOKE --------------------
+if (text.toLowerCase() === ".joke") {
+  try {
+    const joke = await askAI({ prompt: "Give me a short, funny anime/meme style joke." });
+    await sock.sendMessage(from, { text: `😂 Joke:\n${joke}` });
+  } catch (err) {
+    console.error("❌ Joke error:", err);
+    await sock.sendMessage(from, { text: "⚠️ Could not fetch a joke right now. Try again later." });
+  }
+  return;
+}
+
+// -------------------- MOTIVATIONAL ANIME QUOTE --------------------
+if (text.toLowerCase() === ".quote") {
+  try {
+    const quote = await askAI({ prompt: "Give me a short motivational anime quote." });
+    await sock.sendMessage(from, { text: `💡 Quote:\n${quote}` });
+  } catch (err) {
+    console.error("❌ Quote error:", err);
+    await sock.sendMessage(from, { text: "⚠️ Could not fetch a quote right now. Try again later." });
+  }
   return;
 }
 if (isGroup && msg.message?.imageMessage) {
@@ -6870,14 +7675,23 @@ if (text.startsWith(".rank add")) {
   );
 
   if (res.data.success) {
+  // Ensure the cache for this group exists
+  if (!rankCache[from]) rankCache[from] = [];
 
-    await fetchRanks();
+  // Add the new rank to cache
+  rankCache[from].push({
+    id: res.data.id,          // make sure backend returns new rank ID
+    rank_name: name,
+    rank_type: type,
+    position: type === "position" ? value : null,
+    min_points: type === "points" ? value : null,
+    creator_id: sender
+  });
 
-    await sock.sendMessage(from,{
-      text:`✅ Rank added: ${name}`
-    });
-
-  } else {
+  await sock.sendMessage(from, {
+    text: `✅ Rank added: ${name}`
+  });
+} else {
 
     await sock.sendMessage(from,{
       text:`❌ Failed: ${res.data.error || "Unknown error"}`
@@ -6912,14 +7726,15 @@ if (text.startsWith(".rank delete")) {
   );
 
   if (res.data.success) {
+  // Remove the rank from cache
+  if (rankCache[from]) {
+    rankCache[from] = rankCache[from].filter(r => r.id !== id);
+  }
 
-    await fetchRanks();
-
-    await sock.sendMessage(from,{
-      text:`🗑 Rank deleted (ID ${id})`
-    });
-
-  } else {
+  await sock.sendMessage(from, {
+    text: `🗑 Rank deleted (ID ${id})`
+  });
+}else {
 
     await sock.sendMessage(from,{
       text:`❌ Failed: ${res.data.error || "Unknown error"}`
@@ -7294,7 +8109,11 @@ metadata.participants?.find(p => p.id === userId)?.name ||
 userId.split("@")[0];
 
       // ✅ Success message
-      await sock.sendMessage(from, { text: `🚫 ${userName} has been kicked from the group.` });
+      // ✅ Success message with proper mention
+await sock.sendMessage(from, {
+  text: `🚫 @${userName} has been kicked from the group.`,
+  mentions: [userId]  // ⚠️ Add this line to properly tag the user
+});
     } catch (err) {
       // Only send this if the bot truly cannot kick (bot is not admin, or user is admin)
       console.error(`Kick error for ${userId}:`, err);
@@ -7519,7 +8338,76 @@ Rules:
   // ⚠️ Stop further processing after sending confirmation
   return;
 }
-      if (isGroup && text.toLowerCase() === ".guessanime") {
+if (isGroup && text.toLowerCase() === ".globalleaderboard") {
+
+  const user = msg.key.participant || msg.key.remoteJid;
+
+  // Check if user is group admin
+  const admins = await getGroupAdmins(sock, from);
+  const isAdmin = admins.includes(user);
+
+  if (!isAdmin) {
+    await sock.sendMessage(from, {
+      text: "❌ Only group admins can view the global leaderboard."
+    });
+    return;
+  }
+
+  // Check if bot is enabled in this group
+  if (groupCommandsCache[from]?.bot === "off") {
+    await sock.sendMessage(from, {
+      text: "❌ Bot is disabled in this group."
+    });
+    return;
+  }
+
+  // Optional: check if games/protection is enabled
+  if (groupCommandsCache[from]?.games !== "on") {
+    await sock.sendMessage(from, {
+      text: "❌ Games are disabled in this group."
+    });
+    return;
+  }
+
+  // Send loading message
+  await sock.sendMessage(from, {
+    text: "🌐 Fetching global leaderboard, please wait..."
+  });
+
+  try {
+    // Fetch global leaderboard from backend
+    const res = await fetch("https://kiroflix.site/backend/getGlobalLeaderboard.php");
+    const data = await res.json();
+
+    if (!data.success || !data.data.length) {
+      await sock.sendMessage(from, { text: "⚠️ No global leaderboard data found." });
+      return;
+    }
+
+    // Build leaderboard message
+    let message = "🌐 *Global Leaderboard Top 10*\n\n";
+
+    data.data.forEach((u, idx) => {
+      message += `${idx + 1}. ${u.mention}\n`;
+      message += `Points: ${u.total_points}\n`;
+      message += `Groups: ${u.groups.join(", ")}\n\n`;
+    });
+
+    // Send leaderboard with mentions
+    await sock.sendMessage(from, {
+      text: message,
+      mentions: data.data.map(u => u.user_id)
+    });
+
+  } catch (err) {
+    console.error("Global Leaderboard error:", err);
+    await sock.sendMessage(from, { text: "❌ Error fetching global leaderboard." });
+  }
+
+  return;
+}
+      // -------------------- Guess Anime Start --------------------
+if (isGroup && text.toLowerCase() === ".guessanime" || text.toLowerCase() === ".guessanime start") {
 
   const user = msg.key.participant || msg.key.remoteJid;
 
@@ -7561,7 +8449,38 @@ Rules:
   startGuessAnimeGame(sock, from);
   return;
 }
-if (isGroup && text.toLowerCase() === ".guesscharacter") {
+
+// -------------------- Guess Anime Stop --------------------
+if (isGroup && text.toLowerCase() === ".guessanime stop") {
+
+  const user = msg.key.participant || msg.key.remoteJid;
+
+  const admins = await getGroupAdmins(sock, from);
+  const isAdmin = admins.includes(user);
+
+  if (!isAdmin) {
+    await sock.sendMessage(from,{
+      text:"❌ Only group admins can stop Guess The Anime."
+    });
+    return;
+  }
+
+  if (!guessAnimeGames[from]) {
+    await sock.sendMessage(from,{
+      text:"⚠️ No Guess The Anime game is currently running."
+    });
+    return;
+  }
+
+  await sock.sendMessage(from,{
+    text:"🛑 Guess The Anime stopped by admin."
+  });
+
+  endGuessGame(sock, from);
+  return;
+}
+// -------------------- Guess Character Start --------------------
+if (isGroup && text.toLowerCase() === ".guesscharacter" || text.toLowerCase() === ".guesscharacter start") {
 
   const user = msg.key.participant || msg.key.remoteJid;
 
@@ -7603,6 +8522,37 @@ if (isGroup && text.toLowerCase() === ".guesscharacter") {
   startGuessCharacterGame(sock, from);
   return;
 }
+
+// -------------------- Guess Character Stop --------------------
+if (isGroup && text.toLowerCase() === ".guesscharacter stop") {
+
+  const user = msg.key.participant || msg.key.remoteJid;
+
+  const admins = await getGroupAdmins(sock, from);
+  const isAdmin = admins.includes(user);
+
+  if (!isAdmin) {
+    await sock.sendMessage(from,{
+      text:"❌ Only group admins can stop Guess The Character."
+    });
+    return;
+  }
+
+  if (!guessCharacterGames[from]) {
+    await sock.sendMessage(from,{
+      text:"⚠️ No Guess The Character game is currently running."
+    });
+    return;
+  }
+
+  await sock.sendMessage(from,{
+    text:"🛑 Guess The Character stopped by admin."
+  });
+
+  endCharacterGame(sock, from);
+  return;
+}
+
       // 🎮 Manual quiz start by admin
 if (isGroup && text.toLowerCase() === ".quiz start") {
 
@@ -7744,7 +8694,21 @@ if (isGroup) {
   if (isNaN(index) || index < 0 || index >= g.hands[sender].length) return;
   await play(sock, from, sender, index, mode, targetIndex);
 }
+// -----------------------------
+// 🔄 NEXT PHASE
+// -----------------------------
+if (duelGames[from] && textLower === ".next") {
+  const g = duelGames[from];
+  if (!g) return;
+
+  if (sender !== g.turn){
+    return sock.sendMessage(from,{ text:"⛔ Not your turn!" });
+  }
+
+  await nextPhase(sock, from);
 }
+}
+
 if (isGroup && text.toLowerCase().startsWith(".")) {
   const parts = text.trim().split(" ");
   const cmd = parts[0].slice(1).toLowerCase(); // removes dot
@@ -7920,7 +8884,171 @@ if (subCommand === "list") {
     await sock.sendMessage(from, { text: "⚠️ Error managing group notes." });
   }
 }
-      
+if (body.startsWith(".assistant")) {
+
+const question = body.replace(".assistant", "").trim()
+
+// react to show assistant started
+await sock.sendMessage(from, {
+react: { text: "🤖", key: msg.key }
+})
+
+// detect reply context
+const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+
+let repliedText = ""
+
+if (quotedMsg) {
+repliedText =
+quotedMsg.conversation ||
+quotedMsg.extendedTextMessage?.text ||
+quotedMsg.imageMessage?.caption ||
+quotedMsg.videoMessage?.caption ||
+""
+}
+
+// realistic typing simulation
+await sock.sendPresenceUpdate("composing", from)
+
+const typingInterval = setInterval(() => {
+sock.sendPresenceUpdate("composing", from)
+}, 4000)
+
+// build AI prompt
+const aiPrompt = `
+You are the intelligent assistant of Kiroflix.
+
+------------------------------------
+ABOUT KIROFLIX
+------------------------------------
+
+Kiroflix is an anime & manhwa entertainment ecosystem.
+
+MAIN SERVICES
+
+Anime Streaming
+• Watch anime instantly
+• High quality streaming
+• Free streaming
+• No advertisements
+• Premium viewing experience
+
+Manhwa Platform
+• Read manhwa chapters
+• Daily chapter releases
+• Discover new series
+
+Community & Fun
+• Anime games
+• Guess character
+• Anime quizzes
+• Watch parties
+• Waifu claim system
+
+Media Tools
+• Anime wallpapers
+• Sticker generator
+
+Protection System
+• Anti spam
+• Anti links
+• Anti raid
+• Bad word filter
+• AI NSFW detection
+
+Statistics
+• Leaderboards
+• Rank system
+• User profiles
+• Activity tracking
+
+Admin Tools
+• Kick members
+• Ban / unban users
+• Configure group settings
+• Manage ranks
+
+------------------------------------
+KIROFLIX ECOSYSTEM
+------------------------------------
+
+Kiroflix is building a full anime ecosystem including:
+
+• Anime streaming website
+• Manhwa reading platform
+• WhatsApp anime bot
+• Future mobile apps
+• More entertainment platforms coming soon
+
+The mission is to create a **complete anime experience**.
+
+------------------------------------
+COMMAND DATABASE
+------------------------------------
+${JSON.stringify({
+toggledCommands,
+nonToggledCommands
+}, null, 2)}
+
+------------------------------------
+RULES
+------------------------------------
+
+1 Detect the user's intention
+2 Suggest the best command
+3 Explain simply
+4 Give examples when needed
+5 Guide step by step
+6 Reply in the user's language
+7 Never invent commands
+8 Never show internal JSON
+9 Stay concise but helpful
+
+------------------------------------
+CONTEXT
+------------------------------------
+
+User message:
+${question}
+
+Replied message:
+${repliedText || "None"}
+
+------------------------------------
+TASK
+------------------------------------
+
+Help the user understand how to use the bot.
+`
+
+let response
+
+try {
+
+response = await askAI(aiPrompt)
+
+} catch {
+
+response = "⚠️ Assistant is temporarily unavailable."
+
+}
+
+// stop typing
+clearInterval(typingInterval)
+await sock.sendPresenceUpdate("paused", from)
+
+// send answer
+await sock.sendMessage(from, {
+text: response
+}, { quoted: msg })
+
+// success reaction
+await sock.sendMessage(from, {
+react: { text: "✅", key: msg.key }
+})
+
+return
+}
       
     } else {
       // ✅ Private chat max length
