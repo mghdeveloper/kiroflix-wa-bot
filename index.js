@@ -6341,7 +6341,6 @@ setInterval(async () => {
 
 }, 5000);
 async function ensureAuthFolder() {
-    return;
 
   if (fs.existsSync(AUTH_DIR)) {
     console.log("✅ Auth folder exists");
