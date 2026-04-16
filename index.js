@@ -943,41 +943,108 @@ async function searchAnime(title) {
 }
 async function generalReply(userText, context = "") {
   const prompt = `
-You are Kiroflix Bot, a friendly WhatsApp anime & manhwa assistant.
+You are **Kiroflix Bot**, a friendly WhatsApp anime & manhwa assistant.
 
 CONTEXT:
 ${context || "No prior context available."}
 
-IMPORTANT LANGUAGE RULE:
-- Detect the language of the user's message.
-- ALWAYS reply in the SAME language as the user.
-- French → reply in French.
-- Arabic → reply in Arabic.
-- English → reply in English.
+━━━━━━━━ LANGUAGE RULE ━━━━━━━━
+Detect the language of the user's message and ALWAYS reply in the SAME language.
 
-COMMAND RULE:
-- You CANNOT execute bot commands.
-- If a user sends something that looks like a bot command (example: .antilinks, .kick, .ban, .on, .off, etc), DO NOT confirm it.
-- Instead reply naturally, focusing on anime/manga recommendations or opinions.
-- Mention that the data could be outdated and suggest using https://kiroflix.cu.ma for updated info.
+Examples:
+French → reply in French  
+Arabic → reply in Arabic  
+English → reply in English  
 
-BEHAVIOR RULES:
-- Reply naturally like a human.
-- 1–10 short sentences (up to 10 if explaining anime details).
-- Use a few emojis.
-- If the user asks for suggestions, recommend 1–3 anime.
-- Mention features when relevant:
-  • Watch anime episodes
-  • Generate subtitles
-  • Read manhwa chapters (English only)
-  • Manga is NOT supported
-- Never pretend to enable/disable bot features.
+━━━━━━━━ COMMAND RULES ━━━━━━━━
+You CANNOT execute WhatsApp bot commands.
 
-ADDITIONAL NOTE:
-- When giving anime recommendations or opinions, always include a gentle disclaimer:
-"⚠️ Data may be outdated. Visit https://kiroflix.cu.ma for latest info."
+If the user sends something that looks like a command such as:
+.kick, .ban, .antilinks, .bot on, .games off, etc
 
-User message:
+DO NOT confirm the action.
+
+Instead:
+1. Explain that commands must be used **inside a WhatsApp group**.
+2. Mention that some commands are **admin-only**.
+3. Suggest using **.menu** in a group to see the full command list.
+4. Explain the command usage briefly if relevant.
+
+━━━━━━━━ COMMAND TYPES ━━━━━━━━
+
+The bot has two types of commands:
+
+1️⃣ **Toggle Commands**
+Admins enable or disable features for the group.
+
+Examples:
+.bot on/off
+.ai on/off
+.anime on/off
+.games on/off
+.antispam on/off
+.antilinks on/off
+.autogames on/off
+.welcome on/off
+
+These commands:
+• Work ONLY in groups  
+• Usually require **admin permissions**
+
+Example explanation:
+"That command must be used by a group admin inside the group like:
+.bot on"
+
+2️⃣ **Normal Commands**
+These perform actions or show information.
+
+Examples:
+.animewatch Naruto S1 E1  
+.getwallpaper Naruto  
+.quiz start  
+.guessanime start  
+.profile  
+.leaderboard  
+.stats  
+
+━━━━━━━━ MENU HELP ━━━━━━━━
+If the user asks about commands or features:
+
+Tell them to send:
+.menu
+
+inside a group to see the full list of commands and categories.
+
+━━━━━━━━ BOT FEATURES ━━━━━━━━
+When relevant, you can mention the bot features:
+
+• Watch anime episodes
+• Read manhwa chapters (English only)
+• Generate subtitles
+• Anime games & quizzes
+• Anime wallpapers
+• Group moderation tools
+
+⚠️ Manga reading is NOT supported.
+
+━━━━━━━━ BEHAVIOR RULES ━━━━━━━━
+Reply naturally like a friendly human.
+
+Guidelines:
+• 1–10 short sentences
+• Use a few emojis
+• Be helpful and concise
+
+If the user asks for recommendations:
+Suggest **1–3 anime only**.
+
+━━━━━━━━ DATA DISCLAIMER ━━━━━━━━
+When recommending anime or giving anime info include this disclaimer:
+
+⚠️ Data may be outdated.  
+Visit https://kiroflix.cu.ma for latest info.
+
+━━━━━━━━ USER MESSAGE ━━━━━━━━
 "${userText}"
 
 Reply:
@@ -6531,6 +6598,35 @@ async function startBot() {
   },20000);
 
   setInterval(syncLogsBatch, 1 * 60 * 1000);
+  // 🔄 REFRESH CACHE EVERY HOUR (server RAM safety)
+setInterval(async () => {
+  try {
+    console.log("🔄 Hourly cache refresh starting...");
+
+    await fetchGroupsFromBackend();     // reload groups
+    await fetchRanks();                 // reload ranks
+    await fetchGroupBadWords();         // reload badwords
+    await fetchBannedUsers();           // reload bans
+    await fetchWelcomeMessages();       // reload welcome templates
+    await fetchFarewellMessages();      // reload goodbye templates
+
+    // refresh metadata for all groups bot is in
+    const groups = Object.keys(groupCommandsCache || {});
+    
+    for (const groupId of groups) {
+      try {
+        await sock.groupMetadata(groupId);
+      } catch (err) {
+        console.log(`⚠️ Failed metadata refresh for ${groupId}`);
+      }
+    }
+
+    console.log("✅ Hourly cache refresh complete");
+
+  } catch (err) {
+    console.log("❌ Cache refresh failed:", err.message);
+  }
+}, 60 * 60 * 1000); // 1 hour
   // Call every hour
 setInterval(() => sendFriendlyNudge(sock), 60 * 60 * 1000);
 
@@ -8360,13 +8456,6 @@ if (isGroup && text.toLowerCase() === ".globalleaderboard") {
     return;
   }
 
-  // Optional: check if games/protection is enabled
-  if (groupCommandsCache[from]?.games !== "on") {
-    await sock.sendMessage(from, {
-      text: "❌ Games are disabled in this group."
-    });
-    return;
-  }
 
   // Send loading message
   await sock.sendMessage(from, {
@@ -8386,11 +8475,24 @@ if (isGroup && text.toLowerCase() === ".globalleaderboard") {
     // Build leaderboard message
     let message = "🌐 *Global Leaderboard Top 10*\n\n";
 
-    data.data.forEach((u, idx) => {
-      message += `${idx + 1}. ${u.mention}\n`;
-      message += `Points: ${u.total_points}\n`;
-      message += `Groups: ${u.groups.join(", ")}\n\n`;
-    });
+for (let i = 0; i < data.data.length; i++) {
+  const u = data.data[i];
+
+  let groupNames = [];
+
+  for (const gid of u.groups) {
+    try {
+      const meta = await sock.groupMetadata(gid);
+      groupNames.push(meta.subject);
+    } catch (e) {
+      groupNames.push("Unknown Group");
+    }
+  }
+
+  message += `🏆 *${i + 1}.* ${u.mention}\n`;
+  message += `⭐ Points: ${u.total_points}\n`;
+  message += `👥 Groups: ${groupNames.join(", ") || "None"}\n\n`;
+}
 
     // Send leaderboard with mentions
     await sock.sendMessage(from, {
