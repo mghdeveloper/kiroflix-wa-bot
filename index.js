@@ -732,7 +732,7 @@ async function buildContext(userJid, currentText, maxRecent = 5) {
 async function searchReference(query) {
   try {
     const { data } = await axios.get(
-      "https://kirotools.onrender.com/search",
+      "https://kirotools2.onrender.com/search",
       {
         params: {
           q: query,
@@ -1181,37 +1181,19 @@ function logResponse(tag, data) {
 // 🔹 MANHWA INTENT PARSER
 // ===============================
 async function parseManhwaIntent(text) {
-  const searchData = await searchReference(text);
-
   try {
     const prompt = `
-You are a manhwa title parser.
+Extract the manhwa/manga title and chapter number.
 
-STRICT RULES:
-- DO NOT rename or replace the title in any way
-- DO NOT convert to official or alternative names
-- KEEP the original user wording EXACTLY
-- Only fix:
-  • spacing issues
-  • obvious typos
-  • capitalization (optional)
-
---------------------------------
-SEARCH RESULTS (for reference only, DO NOT change titles):
-${searchData}
---------------------------------
-
-GOAL:
-1️⃣ Extract ONLY the manhwa title
-2️⃣ REMOVE chapter indicators from title
-3️⃣ Extract chapter number
-4️⃣ If chapter missing → 1
-5️⃣ If unclear → {"notFound": true}
+RULES:
+- Keep the title EXACT as user wrote (only fix spacing/typos if obvious)
+- Remove chapter info from title
+- If no chapter → default to 1
 
 Return ONLY JSON:
 
 {
-  "title": "original user title cleaned minimally",
+  "title": "string",
   "chapter": number,
   "notFound": false
 }
@@ -1220,20 +1202,15 @@ User input: "${text}"
 `;
 
     let res = await askAI(prompt);
-    logResponse("AI_INTENT_RAW", res);
 
-    // Remove markdown code blocks if present
     res = res.replace(/```json|```/gi, "").trim();
     const json = res.match(/\{[\s\S]*\}/)?.[0];
-    if (!json) throw new Error("No JSON found in AI response");
+    if (!json) throw new Error("No JSON");
 
-    const parsed = JSON.parse(json);
-    logResponse("AI_INTENT_PARSED", parsed);
-    return parsed;
+    return JSON.parse(json);
 
   } catch (err) {
-    logResponse("MANHWA_INTENT_ERROR", { error: err.message });
-    return { title: text, chapter: 1, notFound: false }; // fallback: use original text
+    return { title: text, chapter: 1, notFound: false };
   }
 }
 
@@ -1247,88 +1224,151 @@ async function searchManhwa(title) {
       { params: { q: title } }
     );
 
-    logResponse("SEARCH_MANHWA_V2", data);
+    const results = data?.result?.items || [];
 
-    if (!data?.success) return [];
+    logResponse("SEARCH_MANHWA_V2", {
+      found: results.length,
+      query: title
+    });
 
-    return data.results || [];
+    return results;
 
   } catch (err) {
-    logResponse("SEARCH_MANHWA_ERROR", { error: err.message });
+    logResponse("SEARCH_MANHWA_ERROR", {
+      error: err.message,
+      query: title
+    });
+
     return [];
   }
 }
-
 // ===============================
 // 🤖 BEST MATCH SELECTOR (STRICT TITLE MATCH)
 // ===============================
+function normalize(str) {
+  return str.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
 async function chooseBestManhwa(intent, results) {
-  try {
-    // Prioritize exact match (case-insensitive), fallback to closest scoring
-    const lowerInput = intent.title.toLowerCase().trim();
+  const input = normalize(intent.title);
 
-    let bestMatch = results.find(r => r.title.toLowerCase().trim() === lowerInput);
+  let best = null;
 
-    if (!bestMatch) {
-      // Fallback: nearest by alt_titles, rating, follows
-      bestMatch = results
-        .map(r => ({
-          ...r,
-          score: r.title.toLowerCase().trim() === lowerInput ? 1000 : 0 + (r.rated_avg || 0) + (r.follows_total || 0)
-        }))
-        .sort((a, b) => b.score - a.score)[0];
+  for (const r of results) {
+    const main = normalize(r.title);
+
+    // 1️⃣ exact title match
+    if (main === input) {
+      best = r;
+      break;
     }
 
-    logResponse("BEST_MANHWA_MATCH", bestMatch || null);
-
-    return bestMatch || results[0]; // ensure some result
-  } catch (err) {
-    logResponse("CHOOSE_MANHWA_ERROR", { error: err.message });
-    return results[0]; // fallback
+    // 2️⃣ alt titles match
+    if (r.alt_titles?.some(t => normalize(t) === input)) {
+      best = r;
+      break;
+    }
   }
+
+  // 3️⃣ partial match
+  if (!best) {
+    best = results.find(r => {
+      const main = normalize(r.title);
+      return main.includes(input) || input.includes(main);
+    });
+  }
+
+  // 4️⃣ fallback scoring
+  if (!best) {
+    best = results
+      .map(r => ({
+        ...r,
+        score:
+          (normalize(r.title).includes(input) ? 50 : 0) +
+          (r.rated_avg || 0) * 10 +
+          (r.follows_total || 0)
+      }))
+      .sort((a, b) => b.score - a.score)[0];
+  }
+
+  logResponse("BEST_MANHWA_MATCH", best
+    ? { found: true, title: best.title }
+    : { found: false, query: intent.title }
+  );
+
+  return best;
 }
 
 
-// ===============================
-// 📖 GET CHAPTER (V2)
-// ===============================
-async function getChapter(hash, chapterNumber) {
 
+// ===============================
+// 🔑 GET TOKEN (IMPORTANT STEP)
+// ===============================
+async function getTokenFromComix(hash, slug) {
   try {
+    const url = `https://comix.to/title/${hash}-${slug}`;
 
     const { data } = await axios.get(
-      "https://kiroflix.site/backend/get_chapter-v2.php",
+      "https://kirotools2.onrender.com/get_token",
       {
-        params: {
-          hash,
-          number: chapterNumber
-        }
+        params: { url },
+        timeout: 180000 // ⏱️ 3 MIN timeout (VERY IMPORTANT)
       }
     );
 
-    logResponse("GET_CHAPTER_V2", data);
+    if (!data?.success || !data?.token) {
+      throw new Error("Token generation failed");
+    }
 
-    const chapters = data?.result?.items || [];
+    logResponse("TOKEN_SUCCESS", {
+      cached: data.cached,
+      token_preview: data.token.slice(0, 20) + "..."
+    });
 
-    if (!chapters.length) return null;
-
-    // prioritize official chapter
-    const official =
-      chapters.find(c => c.is_official === 1) ||
-      chapters[0];
-
-    return official;
+    return data.token;
 
   } catch (err) {
 
-    logResponse("GET_CHAPTER_ERROR", {
+    logResponse("TOKEN_ERROR", {
       error: err.message
     });
 
     return null;
   }
 }
+// ===============================
+// 📖 GET CHAPTER (V2 WITH TOKEN)
+// ===============================
+async function getChapter(hash, slug, chapterNumber) {
+  try {
+    const token = await getTokenFromComix(hash, slug);
+    if (!token) return null;
 
+    const url =
+      `https://kiroflix.site/backend/get_chapter-v2.php` +
+      `?hash=${encodeURIComponent(hash)}` +
+      `&number=${encodeURIComponent(chapterNumber)}` +
+      `&token=${encodeURIComponent(token)}`;
+
+    const { data } = await axios.get(url, {
+      timeout: 60000
+    });
+
+    const items = data?.result?.items || [];
+    if (!items.length) return null;
+
+    // ✅ PRIORITY: official > highest votes > first
+    const best =
+      items.find(c => c.is_official === 1) ||
+      items.sort((a, b) => (b.votes || 0) - (a.votes || 0))[0];
+
+    return best;
+
+  } catch (err) {
+    console.log("GET_CHAPTER ERROR:", err.message);
+    return null;
+  }
+}
 
 // ===============================
 // 🖼 GET CHAPTER IMAGES (V2)
@@ -1367,7 +1407,7 @@ async function getChapterImages(chapterPath) {
 async function startPDFJob(imageUrls) {
   try {
     const res = await axios.post(
-      "https://kirotools.onrender.com/build_pdf_async",
+      "https://kirotools2.onrender.com/build_pdf_async",
       { images: imageUrls },
       { timeout: 30000 }
     );
@@ -1400,7 +1440,7 @@ async function waitForPDF(jobId, sock, from, progressKey) {
 
     try {
       const { data } = await axios.get(
-        "https://kirotools.onrender.com/pdf_status",
+        "https://kirotools2.onrender.com/pdf_status",
         { params: { jobId }, timeout: 120000 }
       );
 
@@ -1447,7 +1487,7 @@ async function waitForPDF(jobId, sock, from, progressKey) {
 async function downloadPDF(jobId) {
   try {
     const res = await axios.get(
-      "https://kirotools.onrender.com/pdf_download",
+      "https://kirotools2.onrender.com/pdf_download",
       {
         params: { jobId },
         responseType: "arraybuffer",
@@ -1506,10 +1546,10 @@ async function handleManhwaRequest(sock, text, from, thinkingKey) {
     const manhwa = await chooseBestManhwa(intent, results);
 
     const chapter = await getChapter(
-      manhwa.hash_id,
-      intent.chapter
-    );
-
+  manhwa.hash_id,
+  manhwa.slug,        // ✅ FIX
+  intent.chapter      // ✅ FIX
+);
     if (!chapter) {
 
       return sock.sendMessage(from, {
@@ -6408,6 +6448,8 @@ setInterval(async () => {
 
 }, 5000);
 async function ensureAuthFolder() {
+  return;
+
 
   if (fs.existsSync(AUTH_DIR)) {
     console.log("✅ Auth folder exists");
