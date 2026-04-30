@@ -6342,7 +6342,6 @@ async function backupAuthFolder() {
 
 // ================= RESTORE =================
 async function restoreAuthFolder() {
-    return;
 
   if (restoring) {
     console.log("⏳ Restore already running...");
